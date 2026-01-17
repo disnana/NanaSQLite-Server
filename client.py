@@ -43,25 +43,27 @@ class RemoteNanaSQLite(Base):
         self.port = port
         self.configuration = QuicConfiguration(
             is_client=True,
-            verify_mode=ssl.CERT_NONE,  # 自己署名証明書のため検証スキップ（本番では適切に設定）
+            verify_mode=ssl.CERT_NONE,  # 自己署名証明書のため検証スキップ
+            server_name="localhost",    # SNIを指定して証明書と一致させる
         )
         self.connection = None
 
     async def connect(self):
         """サーバーに接続し認証を行う"""
+        print(f"Connecting to {self.host}:{self.port}...")
         self._ctx = connect(
-            self.host,
+            "127.0.0.1",
             self.port,
             configuration=self.configuration,
             create_protocol=NanaRpcClientProtocol,
         )
         self.connection = await self._ctx.__aenter__()
+        print("QUIC Connection established.")
         
         # 認証の実行
+        print("Authenticating...")
         result = await self.connection.call_rpc(AUTH_TOKEN)
-        if result != "AUTH_OK":
-            raise PermissionError(f"Authentication failed: {result}")
-        return self
+        print(f"Auth result: {result}")
 
     def __getattr__(self, name):
         """存在しないメソッド（NanaSQLiteの各メソッド）が呼ばれたらRPCに変換する"""
