@@ -154,8 +154,18 @@ async def example():
         print(f"{Fore.MAGENTA}Setting 'security_test' = 'Passkey Works!'{Style.RESET_ALL}")
         for _ in range(100):
             rnd_uuid = str(random_uuid())
-            temp = f"Passkey Authentication Success! (random_uuid: {rnd_uuid})"
             print(f"{Fore.BLUE}Generated random UUID: {rnd_uuid}{Style.RESET_ALL}")
+            table_exists = await client.table_exists("security_test")
+            if not table_exists:
+                print(f"{Fore.YELLOW}Creating table 'security_test'...{Style.RESET_ALL}")
+                await client.create_table("security_test", {"id": "INTEGER PRIMARY KEY", "data": "TEXT"})
+                print(f"{Fore.GREEN}Table created.{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.YELLOW}Table 'security_test' already exists.{Style.RESET_ALL}")
+            await client.set_item_async(f"id-{_}", value=rnd_uuid)
+            temp = await client.get_item_async(f"id-{_}")
+            print(f"{Fore.BLUE}Read back: {temp}{Style.RESET_ALL}")
+            temp = f"Passkey Authentication Success! (random_uuid: {rnd_uuid})"
             print(f"{Fore.CYAN}Sending: {temp}{Style.RESET_ALL}")
             await client.set_item_async("security_test", value=temp)
             print(f"{Fore.GREEN}Done!{Style.RESET_ALL}")
@@ -166,6 +176,8 @@ async def example():
                 print(f"{Fore.GREEN}{Back.BLACK}✓ Success!{Style.RESET_ALL}")
             else:
                 print(f"{Fore.RED}{Back.BLACK}✗ Failed!{Style.RESET_ALL}")
+        await client.drop_table("security_test")
+        print(f"{Fore.GREEN}Table 'security_test' dropped.{Style.RESET_ALL}")
     finally:
         await client.close()
 

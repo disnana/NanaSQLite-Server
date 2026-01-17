@@ -17,13 +17,13 @@ async def verify():
         await client.connect()
         
         print(f"\n{Fore.CYAN}--- Test 1: Method Auto-Wrapping ---{Style.RESET_ALL}")
-        # create_table は NanaSQLite に実在するメソッド
-        await client.create_table("test_table_remote_verify")
+        # create_table(table_name, columns, ...)
+        await client.create_table("test_table_remote_verify", {"id": "INTEGER PRIMARY KEY", "data": "TEXT"})
         print(f"{Fore.GREEN}✓ create_table executed successfully.{Style.RESET_ALL}")
 
         print(f"\n{Fore.CYAN}--- Test 2: Exception Reconstruction (AttributeError) ---{Style.RESET_ALL}")
         try:
-            # table_create は存在しない（AttributeErrorを期待）
+            # table_create は存在しない（サーバー側で発生したAttributeErrorを期待）
             await client.table_create("should_fail")
         except AttributeError as e:
             print(f"{Fore.GREEN}✓ Caught expected AttributeError: {e}{Style.RESET_ALL}")
@@ -32,8 +32,8 @@ async def verify():
 
         print(f"\n{Fore.CYAN}--- Test 3: NanaSQLite Specific Exception (ValidationError) ---{Style.RESET_ALL}")
         try:
-            # 不正なテーブル名で ValidationError を誘発
-            await client.create_table("123invalid")
+            # 不正なテーブル名（数字開始）で ValidationError を誘発
+            await client.create_table("123invalid", {"id": "INTEGER"})
         except NanaSQLiteValidationError as e:
             print(f"{Fore.GREEN}✓ Caught expected NanaSQLiteValidationError: {e}{Style.RESET_ALL}")
         except Exception as e:
