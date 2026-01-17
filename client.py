@@ -85,6 +85,15 @@ class RemoteNanaSQLite(Base):
 
         return rpc_wrapper
 
+    async def __setitem__(self, key, value):
+        return await self.__getattr__("__setitem__")(key, value)
+
+    async def __getitem__(self, key):
+        return await self.__getattr__("__getitem__")(key)
+
+    async def __delitem__(self, key):
+        return await self.__getattr__("__delitem__")(key)
+
     async def close(self):
         if self.connection:
             self.connection.close()
@@ -94,16 +103,24 @@ class RemoteNanaSQLite(Base):
 async def example():
     client = RemoteNanaSQLite()
     print("Connecting to NanaSQLite Server...")
-    await client.connect()
+    try:
+        await client.connect()
 
-    print("Executing: db['test_key'] = 'Hello QUIC!'")
-    # 本来の辞書操作やメソッドが補完付きで呼べる（__setitem__などもRPC化可能だが、今回はメソッド呼び出しを優先）
-    await client.set("test_key", "Hello from Client via QUIC!")
-    
-    val = await client.get("test_key")
-    print(f"Result from Server: {val}")
+        print("Executing: db['test_key'] = 'Hello QUIC!'")
+        # 内部で __setitem__ RPCが呼ばれる
+        await client.__setitem__("test_key", "Hello from Client via QUIC!")
+        
+        # 内部で __getitem__ RPCが呼ばれる
+        val = await client.__getitem__("test_key")
+        print(f"Result from Server: {val}")
 
-    await client.close()
+        # 通常のメソッドも呼べる
+        print("Executing keys()...")
+        keys = await client.keys()
+        print(f"Keys in DB: {keys}")
+
+    finally:
+        await client.close()
 
 if __name__ == "__main__":
     asyncio.run(example())
