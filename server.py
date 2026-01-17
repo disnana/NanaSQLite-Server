@@ -63,11 +63,9 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         self.send_stream_data(stream_id, payload, end_stream=True)
 
 async def main():
-    configuration = QuicConfiguration(
-        is_client=False,
-        certificate_path="cert.pem",
-        private_key_path="key.pem",
-    )
+    configuration = QuicConfiguration(is_client=False)
+    # 1.2.0+ では load_cert_chain を使用する
+    configuration.load_cert_chain("cert.pem", "key.pem")
 
     print("NanaSQLite QUIC Server starting on localhost:4433")
     await serve(

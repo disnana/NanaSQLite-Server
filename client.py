@@ -48,12 +48,14 @@ class RemoteNanaSQLite(Base):
 
     async def connect(self):
         """サーバーに接続し認証を行う"""
-        self.connection = await connect(
+        self._ctx = connect(
             self.host,
             self.port,
             configuration=self.configuration,
             create_protocol=NanaRpcClientProtocol,
         )
+        self.connection = await self._ctx.__aenter__()
+        
         # 認証の実行
         result = await self.connection.call_rpc(AUTH_TOKEN)
         if result != "AUTH_OK":
