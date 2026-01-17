@@ -85,13 +85,14 @@ class RemoteNanaSQLite(Base):
 
         return rpc_wrapper
 
-    async def __setitem__(self, key, value):
+    # 特殊メソッド（__setitem__等）はasyncにできないので、別メソッドを用意
+    async def set_item(self, key, value):
         return await self.__getattr__("__setitem__")(key, value)
 
-    async def __getitem__(self, key):
+    async def get_item(self, key):
         return await self.__getattr__("__getitem__")(key)
 
-    async def __delitem__(self, key):
+    async def del_item(self, key):
         return await self.__getattr__("__delitem__")(key)
 
     async def close(self):
@@ -108,10 +109,10 @@ async def example():
 
         print("Executing: db['test_key'] = 'Hello QUIC!'")
         # 内部で __setitem__ RPCが呼ばれる
-        await client.__setitem__("test_key", "Hello from Client via QUIC!")
-        
+        await client.set_item("test_key", "Hello from Client via QUIC!")
+
         # 内部で __getitem__ RPCが呼ばれる
-        val = await client.__getitem__("test_key")
+        val = await client.get_item("test_key")
         print(f"Result from Server: {val}")
 
         # 通常のメソッドも呼べる

@@ -5,3 +5,5 @@ __pycache__/
 server_db.sqlite
 server_db.sqlite-shm
 server_db.sqlite-wal
+nana_private.pem
+nana_public.pub
