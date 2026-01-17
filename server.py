@@ -118,7 +118,12 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 self._send_response(stream_id, {"status": "error", "message": "Unauthorized"})
 
         except Exception as e:
-            self._send_response(stream_id, {"status": "error", "message": str(e)})
+            error_type = type(e).__name__
+            self._send_response(stream_id, {
+                "status": "error", 
+                "error_type": error_type,
+                "message": str(e)
+            })
 
     async def execute_rpc(self, message):
         method_name = message.get("method")
@@ -133,7 +138,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 result = method(*args, **kwargs)
             return {"status": "success", "result": result}
         else:
-            return {"status": "error", "message": f"Method {method_name} not found"}
+            raise AttributeError(f"NanaSQLite object has no attribute '{method_name}'")
 
     def _send_response(self, stream_id, data):
         payload = protocol.encode_message(data)

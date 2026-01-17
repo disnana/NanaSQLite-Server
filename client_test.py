@@ -12,26 +12,16 @@ from colorama import Fore, Back, Style, init
 # colorama初期化（全プラットフォーム対応）
 init(autoreset=True)
 
-import nanasqlite.exceptions as nana_exc
-
 # IDE補完用
 if TYPE_CHECKING:
     from nanasqlite import NanaSQLite
+
     Base = NanaSQLite
 else:
     Base = object
 
-# NanaSQLiteの例外クラスをマッピング
-EXCEPTION_MAP = {
-    name: obj for name, obj in vars(nana_exc).items()
-    if isinstance(obj, type) and issubclass(obj, BaseException)
-}
-# 一般的なPythonの組み込み例外も追加
-import builtins
-for _name in ["AttributeError", "TypeError", "ValueError", "KeyError", "RuntimeError", "PermissionError"]:
-    EXCEPTION_MAP[_name] = getattr(builtins, _name)
-
 PRIVATE_KEY_PATH = "nana_private.pem"
+
 
 class NanaRpcClientProtocol(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs):
@@ -51,6 +41,7 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
         self.transmit()
         return await self._responses.get()
 
+
 class RemoteNanaSQLite(Base):
     def __init__(self, host="127.0.0.1", port=4433):
         self.host = host
@@ -61,7 +52,7 @@ class RemoteNanaSQLite(Base):
             server_name="localhost",
         )
         self.connection = None
-        
+
         # 秘密鍵のロード
         try:
             with open(PRIVATE_KEY_PATH, "rb") as f:
@@ -87,41 +78,38 @@ class RemoteNanaSQLite(Base):
         # 1. 認証開始 (チャレンジの要求)
         print(f"{Fore.YELLOW}Starting Passkey Authentication...{Style.RESET_ALL}")
         challenge_msg = await self.connection.call_rpc("AUTH_START")
-        
+
         if not isinstance(challenge_msg, dict) or challenge_msg.get("type") != "challenge":
             raise PermissionError(f"Failed to get challenge from server: {challenge_msg}")
-        
+
         challenge_data = challenge_msg.get("data")
-        
+
         # 2. 署名の生成
         signature = self.private_key.sign(challenge_data)
-        
+
         # 3. 署名の送付
         result = await self.connection.call_rpc({"type": "response", "data": signature})
-        
+
         if result == "AUTH_OK":
             print(f"{Fore.GREEN}Authentication successful!{Style.RESET_ALL}")
         else:
             raise PermissionError(f"Authentication failed: {result}")
-            
+
         return self
 
     def __getattr__(self, name):
         async def rpc_wrapper(*args, **kwargs):
             if not self.connection:
                 await self.connect()
-            
+
             request = {"method": name, "args": args, "kwargs": kwargs}
             response = await self.connection.call_rpc(request)
-            
+
             if isinstance(response, dict) and response.get("status") == "error":
-                error_type = response.get("error_type")
-                message = response.get("message", "Unknown error")
-                # サーバー側と同じ例外クラスをインスタンス化して送出
-                exc_class = EXCEPTION_MAP.get(error_type, RuntimeError)
-                raise exc_class(message)
-            
+                raise RuntimeError(response.get("message"))
+
             return response.get("result") if isinstance(response, dict) else response
+
         return rpc_wrapper
 
     def __setitem__(self, key, value):
@@ -153,8 +141,10 @@ class RemoteNanaSQLite(Base):
             self.connection.close()
             await self.connection.wait_closed()
 
+
 def random_uuid():
     return secrets.token_hex(16)
+
 
 # デモ
 async def example():
@@ -162,21 +152,23 @@ async def example():
     try:
         await client.connect()
         print(f"{Fore.MAGENTA}Setting 'security_test' = 'Passkey Works!'{Style.RESET_ALL}")
-        rnd_uuid = str(random_uuid())
-        temp = f"Passkey Authentication Success! (random_uuid: {rnd_uuid})"
-        print(f"{Fore.BLUE}Generated random UUID: {rnd_uuid}{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}Sending: {temp}{Style.RESET_ALL}")
-        await client.set_item_async("security_test", value=temp)
-        print(f"{Fore.GREEN}Done!{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}Reading back...{Style.RESET_ALL}")
-        val = await client.get_item_async("security_test")
-        print(f"{Fore.BLUE}Read back: {val}{Style.RESET_ALL}")
-        if temp == val:
-            print(f"{Fore.GREEN}{Back.BLACK}✓ Success!{Style.RESET_ALL}")
-        else:
-            print(f"{Fore.RED}{Back.BLACK}✗ Failed!{Style.RESET_ALL}")
+        for _ in range(100):
+            rnd_uuid = str(random_uuid())
+            temp = f"Passkey Authentication Success! (random_uuid: {rnd_uuid})"
+            print(f"{Fore.BLUE}Generated random UUID: {rnd_uuid}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}Sending: {temp}{Style.RESET_ALL}")
+            await client.set_item_async("security_test", value=temp)
+            print(f"{Fore.GREEN}Done!{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Reading back...{Style.RESET_ALL}")
+            val = await client.get_item_async("security_test")
+            print(f"{Fore.BLUE}Read back: {val}{Style.RESET_ALL}")
+            if temp == val:
+                print(f"{Fore.GREEN}{Back.BLACK}✓ Success!{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.RED}{Back.BLACK}✗ Failed!{Style.RESET_ALL}")
     finally:
         await client.close()
+
 
 if __name__ == "__main__":
     asyncio.run(example())
