@@ -23,7 +23,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
     async def handle_request(self, stream_id, data):
         try:
             message, _ = protocol.decode_message(data)
-            if not message:
+            if message is None:
                 return
 
             # 初回メッセージは認証トークンである必要がある
@@ -60,7 +60,8 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
     def _send_response(self, stream_id, data):
         payload = protocol.encode_message(data)
-        self.send_stream_data(stream_id, payload, end_stream=True)
+        self._quic.send_stream_data(stream_id, payload, end_stream=True)
+        self.transmit()
 
 async def main():
     configuration = QuicConfiguration(is_client=False)

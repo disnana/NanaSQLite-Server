@@ -29,7 +29,8 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
     async def call_rpc(self, data):
         stream_id = self._quic.get_next_available_stream_id()
         payload = protocol.encode_message(data)
-        self.send_stream_data(stream_id, payload, end_stream=True)
+        self._quic.send_stream_data(stream_id, payload, end_stream=True)
+        self.transmit()
         return await self._responses.get()
 
 class RemoteNanaSQLite(Base):
