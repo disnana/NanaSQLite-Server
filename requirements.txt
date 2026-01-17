@@ -1,3 +1,4 @@
 aioquic
 nanasqlite
 cryptography
+colorama

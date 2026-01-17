@@ -146,7 +146,7 @@ async def main():
 
     print(f"NanaSQLite QUIC Server starting on 127.0.0.1:4433")
     print(f"Auth mode: Ed25519 Passkey (Challenge-Response)")
-    
+
     await serve(
         "127.0.0.1",
         4433,

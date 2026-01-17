@@ -6,6 +6,11 @@ from aioquic.quic.configuration import QuicConfiguration
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
 import protocol
+import secrets
+from colorama import Fore, Back, Style, init
+
+# colorama初期化（全プラットフォーム対応）
+init(autoreset=True)
 
 # IDE補完用
 if TYPE_CHECKING:
@@ -52,12 +57,12 @@ class RemoteNanaSQLite(Base):
                     f.read(), password=None
                 )
         except Exception as e:
-            print(f"Error loading private key: {e}")
+            print(f"{Fore.RED}Error loading private key: {e}{Style.RESET_ALL}")
             self.private_key = None
 
     async def connect(self):
         """サーバーに接続し、Ed25519署名による認証を行う"""
-        print(f"Connecting to {self.host}:{self.port}...")
+        print(f"{Fore.CYAN}Connecting to {self.host}:{self.port}...{Style.RESET_ALL}")
         self._ctx = connect(
             self.host,
             self.port,
@@ -65,10 +70,10 @@ class RemoteNanaSQLite(Base):
             create_protocol=NanaRpcClientProtocol,
         )
         self.connection = await self._ctx.__aenter__()
-        print("QUIC Connection established.")
-        
+        print(f"{Fore.GREEN}QUIC Connection established.{Style.RESET_ALL}")
+
         # 1. 認証開始 (チャレンジの要求)
-        print("Starting Passkey Authentication...")
+        print(f"{Fore.YELLOW}Starting Passkey Authentication...{Style.RESET_ALL}")
         challenge_msg = await self.connection.call_rpc("AUTH_START")
         
         if not isinstance(challenge_msg, dict) or challenge_msg.get("type") != "challenge":
@@ -83,7 +88,7 @@ class RemoteNanaSQLite(Base):
         result = await self.connection.call_rpc({"type": "response", "data": signature})
         
         if result == "AUTH_OK":
-            print("Authentication successful!")
+            print(f"{Fore.GREEN}Authentication successful!{Style.RESET_ALL}")
         else:
             raise PermissionError(f"Authentication failed: {result}")
             
@@ -132,17 +137,28 @@ class RemoteNanaSQLite(Base):
             self.connection.close()
             await self.connection.wait_closed()
 
+def random_uuid():
+    return secrets.token_hex(16)
+
 # デモ
 async def example():
-    client = RemoteNanaSQLite()
+    client = RemoteNanaSQLite(host="127.0.0.1", port=4433)
     try:
         await client.connect()
-        print("Setting 'security_test' = 'Passkey Works!'")
-        await client.set_item_async("security_test", "Passkey Authentication Success!")
-
+        print(f"{Fore.MAGENTA}Setting 'security_test' = 'Passkey Works!'{Style.RESET_ALL}")
+        rnd_uuid = str(random_uuid())
+        temp = f"Passkey Authentication Success! (random_uuid: {rnd_uuid})"
+        print(f"{Fore.BLUE}Generated random UUID: {rnd_uuid}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}Sending: {temp}{Style.RESET_ALL}")
+        await client.set_item_async("security_test", value=temp)
+        print(f"{Fore.GREEN}Done!{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Reading back...{Style.RESET_ALL}")
         val = await client.get_item_async("security_test")
-        print(f"Read back: {val}")
-        
+        print(f"{Fore.BLUE}Read back: {val}{Style.RESET_ALL}")
+        if temp == val:
+            print(f"{Fore.GREEN}{Back.BLACK}✓ Success!{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.RED}{Back.BLACK}✗ Failed!{Style.RESET_ALL}")
     finally:
         await client.close()
 
