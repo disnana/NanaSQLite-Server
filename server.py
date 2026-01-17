@@ -49,8 +49,19 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
     def connection_made(self, transport):
         super().connection_made(transport)
-        self.client_ip = transport.get_extra_info("peername")[0]
+        # aioquicではtransport.get_extra_info("peername")がNoneを返すことがあるため
+        # _quicオブジェクトからリモートアドレスを取得
+        try:
+            addr = self._quic._peer_cid.host_addr if hasattr(self._quic, '_peer_cid') else None
+            if not addr:
+                # フォールバック: transportから取得を試みる
+                peername = transport.get_extra_info("peername")
+                addr = peername[0] if peername else "unknown"
+        except Exception:
+            addr = "unknown"
+        self.client_ip = addr
         print(f"New connection from: {self.client_ip}")
+
 
     def quic_event_received(self, event):
         if is_banned(self.client_ip):
