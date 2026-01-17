@@ -15,8 +15,10 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         super().__init__(*args, **kwargs)
         self.db = None
         self.authenticated = False
+        print(f"New connection established: {self}")
 
     def quic_event_received(self, event):
+        print(f"Event received: {event}")
         if isinstance(event, StreamDataReceived):
             asyncio.create_task(self.handle_request(event.stream_id, event.data))
 
@@ -68,9 +70,9 @@ async def main():
     # 1.2.0+ では load_cert_chain を使用する
     configuration.load_cert_chain("cert.pem", "key.pem")
 
-    print("NanaSQLite QUIC Server starting on localhost:4433")
+    print("NanaSQLite QUIC Server starting on 127.0.0.1:4433")
     await serve(
-        "localhost",
+        "127.0.0.1",
         4433,
         configuration=configuration,
         create_protocol=NanaRpcProtocol,
