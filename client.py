@@ -52,14 +52,46 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
         return await self._responses.get()
 
 class RemoteNanaSQLite(Base):
-    def __init__(self, host="127.0.0.1", port=4433):
+    def __init__(self, host="127.0.0.1", port=4433, ca_cert_path="cert.pem", verify_ssl=True):
+        """
+        RemoteNanaSQLite クライアント
+        
+        Args:
+            host: サーバーホスト
+            port: サーバーポート
+            ca_cert_path: サーバー証明書のパス (verify_ssl=True時に使用)
+            verify_ssl: SSL証明書を検証するか (本番環境ではTrueを推奨)
+        """
         self.host = host
         self.port = port
-        self.configuration = QuicConfiguration(
-            is_client=True,
-            verify_mode=ssl.CERT_NONE,
-            server_name="localhost",
-        )
+        
+        # [FIX 2] SSL証明書検証の設定
+        if verify_ssl:
+            self.configuration = QuicConfiguration(
+                is_client=True,
+                verify_mode=ssl.CERT_REQUIRED,
+                server_name="localhost",
+            )
+            # CA証明書をロード
+            try:
+                self.configuration.load_verify_locations(ca_cert_path)
+            except Exception as e:
+                print(f"{Fore.YELLOW}Warning: Could not load CA cert: {e}{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}Falling back to CERT_NONE (insecure){Style.RESET_ALL}")
+                self.configuration = QuicConfiguration(
+                    is_client=True,
+                    verify_mode=ssl.CERT_NONE,
+                    server_name="localhost",
+                )
+        else:
+            # 開発環境用: 証明書検証なし (非推奨)
+            print(f"{Fore.YELLOW}Warning: SSL verification disabled (insecure){Style.RESET_ALL}")
+            self.configuration = QuicConfiguration(
+                is_client=True,
+                verify_mode=ssl.CERT_NONE,
+                server_name="localhost",
+            )
+        
         self.connection = None
         
         # 秘密鍵のロード

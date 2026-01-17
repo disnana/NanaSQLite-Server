@@ -3,6 +3,8 @@ import logging
 import os
 import secrets
 import time
+import functools
+from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.quic.configuration import QuicConfiguration
@@ -21,6 +23,15 @@ BAN_DURATION = 900  # 15分 (秒)
 failed_attempts = defaultdict(int)  # {ip: count}
 ban_list = {}  # {ip: unban_time}
 
+# スレッドプールエグゼキューター (書き込み用)
+_executor = ThreadPoolExecutor(max_workers=4)
+
+# 書き込み系メソッド (executorで実行)
+WRITE_METHODS = {
+    "__setitem__", "__delitem__", "set", "delete", "pop", "update",
+    "clear", "setdefault", "batch_update", "batch_delete", "create_table",
+}
+
 def is_banned(ip):
     """IPがBANされているか確認"""
     if ip in ban_list:
@@ -30,6 +41,18 @@ def is_banned(ip):
             del ban_list[ip]
             failed_attempts[ip] = 0
     return False
+
+
+# 共有DBインスタンス (bulk_load=True でメモリに全データをロード)
+_shared_db = None
+
+def get_shared_db():
+    """共有DBインスタンスを取得 (遅延初期化)"""
+    global _shared_db
+    if _shared_db is None:
+        _shared_db = NanaSQLite("server_db.sqlite", bulk_load=True)
+    return _shared_db
+
 
 class NanaRpcProtocol(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs):
@@ -88,11 +111,16 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 
                 # 認証フェーズ2: 署名の検証
                 if isinstance(message, dict) and message.get("type") == "response":
+                    # [FIX 3] チャレンジが未生成の場合は明示的に拒否
+                    if self.challenge is None:
+                        self._send_response(stream_id, "AUTH_FAILED")
+                        return
+                    
                     signature = message.get("data")
                     try:
                         self.public_key.verify(signature, self.challenge)
                         self.authenticated = True
-                        self.db = NanaSQLite("server_db.sqlite")
+                        self.db = get_shared_db()  # 共有DBを使用
                         failed_attempts[self.client_ip] = 0
                         response = "AUTH_OK"
                         print(f"Authentication successful for {self.client_ip}")
@@ -109,9 +137,18 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                     
                     self._send_response(stream_id, response)
                     return
+                
+                # [FIX 3] 未認証状態で不正なメッセージを受信した場合
+                self._send_response(stream_id, {"status": "error", "message": "Unauthorized: Please start with AUTH_START"})
+                return
 
             # 2. RPC実行 (認証済みの場合)
             if self.authenticated:
+                # [FIX 3] 認証済み状態でAUTH_STARTを再送された場合は無視
+                if message == "AUTH_START":
+                    self._send_response(stream_id, {"status": "error", "message": "Already authenticated"})
+                    return
+                
                 result = await self.execute_rpc(message)
                 self._send_response(stream_id, result)
             else:
@@ -132,10 +169,20 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
         if hasattr(self.db, method_name):
             method = getattr(self.db, method_name)
-            if asyncio.iscoroutinefunction(method):
+            
+            # [FIX 1] 書き込み系メソッドはexecutorで実行 (非ブロッキング化)
+            if method_name in WRITE_METHODS:
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    _executor,
+                    functools.partial(method, *args, **kwargs)
+                )
+            elif asyncio.iscoroutinefunction(method):
                 result = await method(*args, **kwargs)
             else:
+                # 読み取り系はメモリから直接参照 (bulk_load=True のため高速)
                 result = method(*args, **kwargs)
+            
             return {"status": "success", "result": result}
         else:
             raise AttributeError(f"NanaSQLite object has no attribute '{method_name}'")
@@ -151,6 +198,7 @@ async def main():
 
     print(f"NanaSQLite QUIC Server starting on 127.0.0.1:4433")
     print(f"Auth mode: Ed25519 Passkey (Challenge-Response)")
+    print(f"Security: Write operations run in executor (non-blocking)")
 
     await serve(
         "127.0.0.1",
