@@ -2,3 +2,6 @@ cert.pem
 key.pem
 __pycache__/
 .idea/
+server_db.sqlite
+server_db.sqlite-shm
+server_db.sqlite-wal
