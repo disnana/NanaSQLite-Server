@@ -3,17 +3,18 @@ import ssl
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 from aioquic.asyncio import QuicConnectionProtocol, connect
 from aioquic.quic.configuration import QuicConfiguration
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
 import protocol
 
-# IDE補完（PyCharm等）のためのトリック
+# IDE補完用
 if TYPE_CHECKING:
     from nanasqlite import NanaSQLite
-    # 実行時は object を継承するが、静的解析時は NanaSQLite を継承しているように見せる
     Base = NanaSQLite
 else:
     Base = object
 
-AUTH_TOKEN = "nana-secret-key-2026"
+PRIVATE_KEY_PATH = "nana_private.pem"
 
 class NanaRpcClientProtocol(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs):
@@ -34,25 +35,31 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
         return await self._responses.get()
 
 class RemoteNanaSQLite(Base):
-    """
-    NanaSQLiteのリモートプロキシ。
-    PyCharmなどのIDEでは本物のNanaSQLiteとして補完が効きます。
-    """
-    def __init__(self, host="localhost", port=4433):
+    def __init__(self, host="127.0.0.1", port=4433):
         self.host = host
         self.port = port
         self.configuration = QuicConfiguration(
             is_client=True,
-            verify_mode=ssl.CERT_NONE,  # 自己署名証明書のため検証スキップ
-            server_name="localhost",    # SNIを指定して証明書と一致させる
+            verify_mode=ssl.CERT_NONE,
+            server_name="localhost",
         )
         self.connection = None
+        
+        # 秘密鍵のロード
+        try:
+            with open(PRIVATE_KEY_PATH, "rb") as f:
+                self.private_key = serialization.load_pem_private_key(
+                    f.read(), password=None
+                )
+        except Exception as e:
+            print(f"Error loading private key: {e}")
+            self.private_key = None
 
     async def connect(self):
-        """サーバーに接続し認証を行う"""
+        """サーバーに接続し、Ed25519署名による認証を行う"""
         print(f"Connecting to {self.host}:{self.port}...")
         self._ctx = connect(
-            "127.0.0.1",
+            self.host,
             self.port,
             configuration=self.configuration,
             create_protocol=NanaRpcClientProtocol,
@@ -60,39 +67,49 @@ class RemoteNanaSQLite(Base):
         self.connection = await self._ctx.__aenter__()
         print("QUIC Connection established.")
         
-        # 認証の実行
-        print("Authenticating...")
-        result = await self.connection.call_rpc(AUTH_TOKEN)
-        print(f"Auth result: {result}")
+        # 1. 認証開始 (チャレンジの要求)
+        print("Starting Passkey Authentication...")
+        challenge_msg = await self.connection.call_rpc("AUTH_START")
+        
+        if not isinstance(challenge_msg, dict) or challenge_msg.get("type") != "challenge":
+            raise PermissionError(f"Failed to get challenge from server: {challenge_msg}")
+        
+        challenge_data = challenge_msg.get("data")
+        
+        # 2. 署名の生成
+        signature = self.private_key.sign(challenge_data)
+        
+        # 3. 署名の送付
+        result = await self.connection.call_rpc({"type": "response", "data": signature})
+        
+        if result == "AUTH_OK":
+            print("Authentication successful!")
+        else:
+            raise PermissionError(f"Authentication failed: {result}")
+            
+        return self
 
     def __getattr__(self, name):
-        """存在しないメソッド（NanaSQLiteの各メソッド）が呼ばれたらRPCに変換する"""
         async def rpc_wrapper(*args, **kwargs):
             if not self.connection:
                 await self.connect()
             
-            request = {
-                "method": name,
-                "args": args,
-                "kwargs": kwargs
-            }
+            request = {"method": name, "args": args, "kwargs": kwargs}
             response = await self.connection.call_rpc(request)
             
             if isinstance(response, dict) and response.get("status") == "error":
                 raise RuntimeError(response.get("message"))
             
             return response.get("result") if isinstance(response, dict) else response
-
         return rpc_wrapper
 
-    # 特殊メソッド（__setitem__等）はasyncにできないので、別メソッドを用意
-    async def set_item(self, key, value):
+    async def __setitem__(self, key, value):
         return await self.__getattr__("__setitem__")(key, value)
 
-    async def get_item(self, key):
+    async def __getitem__(self, key):
         return await self.__getattr__("__getitem__")(key)
 
-    async def del_item(self, key):
+    async def __delitem__(self, key):
         return await self.__getattr__("__delitem__")(key)
 
     async def close(self):
@@ -100,26 +117,17 @@ class RemoteNanaSQLite(Base):
             self.connection.close()
             await self.connection.wait_closed()
 
-# 使用例のデモ
+# デモ
 async def example():
     client = RemoteNanaSQLite()
-    print("Connecting to NanaSQLite Server...")
     try:
         await client.connect()
-
-        print("Executing: db['test_key'] = 'Hello QUIC!'")
-        # 内部で __setitem__ RPCが呼ばれる
-        await client.set_item("test_key", "Hello from Client via QUIC!")
-
-        # 内部で __getitem__ RPCが呼ばれる
-        val = await client.get_item("test_key")
-        print(f"Result from Server: {val}")
-
-        # 通常のメソッドも呼べる
-        print("Executing keys()...")
-        keys = await client.keys()
-        print(f"Keys in DB: {keys}")
-
+        print("Setting 'security_test' = 'Passkey Works!'")
+        await client.__setitem__("security_test", "Passkey Authentication Success!")
+        
+        val = await client.__getitem__("security_test")
+        print(f"Read back: {val}")
+        
     finally:
         await client.close()
 
