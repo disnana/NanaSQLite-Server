@@ -103,13 +103,28 @@ class RemoteNanaSQLite(Base):
             return response.get("result") if isinstance(response, dict) else response
         return rpc_wrapper
 
-    async def __setitem__(self, key, value):
+    def __setitem__(self, key, value):
+        """同期版の__setitem__ - 実際の使用ではset_item_asyncを使う"""
+        raise NotImplementedError("Use 'await set_item_async()' instead")
+
+    def __getitem__(self, key):
+        """同期版の__getitem__ - 実際の使用ではget_item_asyncを使う"""
+        raise NotImplementedError("Use 'await get_item_async()' instead")
+
+    def __delitem__(self, key):
+        """同期版の__delitem__ - 実際の使用ではdel_item_asyncを使う"""
+        raise NotImplementedError("Use 'await del_item_async()' instead")
+
+    async def set_item_async(self, key, value):
+        """非同期版のsetitem"""
         return await self.__getattr__("__setitem__")(key, value)
 
-    async def __getitem__(self, key):
+    async def get_item_async(self, key):
+        """非同期版のgetitem"""
         return await self.__getattr__("__getitem__")(key)
 
-    async def __delitem__(self, key):
+    async def del_item_async(self, key):
+        """非同期版のdelitem"""
         return await self.__getattr__("__delitem__")(key)
 
     async def close(self):
@@ -123,9 +138,9 @@ async def example():
     try:
         await client.connect()
         print("Setting 'security_test' = 'Passkey Works!'")
-        await client.__setitem__("security_test", "Passkey Authentication Success!")
-        
-        val = await client.__getitem__("security_test")
+        await client.set_item_async("security_test", "Passkey Authentication Success!")
+
+        val = await client.get_item_async("security_test")
         print(f"Read back: {val}")
         
     finally:
