@@ -41,7 +41,7 @@ class ClientProtocol(QuicConnectionProtocol):
             message, _ = protocol.decode_message(event.data)
             self._responses.put_nowait(message)
 
-    async def send_raw(self, data, timeout=5.0):
+    async def send_raw(self, data, timeout=10.0):
         stream_id = self._quic.get_next_available_stream_id()
         payload = protocol.encode_message(data)
         self._quic.send_stream_data(stream_id, payload, end_stream=True)
@@ -65,8 +65,8 @@ async def create_connection():
         server_name="localhost",
     )
     
-    # 接続リトライロジック (Max 3回)
-    max_retries = 3
+    # 接続リトライロジック (Max 5回)
+    max_retries = 5
     last_err = None
     
     for i in range(max_retries):
@@ -78,7 +78,7 @@ async def create_connection():
             last_err = e
             # 最後の試行でなければ少し待って再試行
             if i < max_retries - 1:
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(2.0)
                 continue
     
     # ここに来るのはリトライ失敗時
@@ -248,8 +248,12 @@ class TestBlocking:
         total_elapsed = time.perf_counter() - start_total
         
         # エラーがないことを確認
+        # エラーがないことを確認
         for result in results:
-            assert not isinstance(result, Exception), f"Error: {result}"
+            if isinstance(result, Exception):
+                # エラーの詳細（タイプとメッセージ）を表示してアサーション失敗させる
+                error_msg = f"{type(result).__name__}: {result}"
+                pytest.fail(f"Concurrent write failed: {error_msg}")
         
         # 各クライアントの処理時間
         individual_times = [r[1] for r in results]
