@@ -4,10 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nanasqlite-server"
-version = "1.0.1dev0"
+dynamic = ["version"]
 authors = [
   { name = "NanaSQLite-Project", email = "support@disnana.com" },
 ]
+
 description = "A secure QUIC-based RPC server for NanaSQLite"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -55,3 +56,7 @@ where = ["src"]
 [[tool.mypy.overrides]]
 module = "ormsgpack"
 ignore_missing_imports = true
+
+[tool.setuptools.dynamic]
+version = {attr = "nanasqlite_server.__version__"}
+
