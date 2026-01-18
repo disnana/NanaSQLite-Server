@@ -6,7 +6,7 @@ import os
 sys.path.append(os.getcwd())
 
 from client import RemoteNanaSQLite
-from nanasqlite.exceptions import NanaSQLiteValidationError, NanaSQLiteError
+from nanasqlite.exceptions import NanaSQLiteValidationError
 from colorama import Fore, Style, init
 
 init(autoreset=True)

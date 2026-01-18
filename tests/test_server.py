@@ -123,7 +123,7 @@ class TestAuthentication:
         """無効な署名は拒否される"""
         ctx, conn = await create_connection()
         try:
-            challenge_msg = await conn.send_raw("AUTH_START")
+            await conn.send_raw("AUTH_START")
             # 間違った署名を送信
             result = await conn.send_raw({"type": "response", "data": b"invalid"})
             assert result == "AUTH_FAILED"

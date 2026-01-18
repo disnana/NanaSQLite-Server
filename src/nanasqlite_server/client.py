@@ -1,18 +1,19 @@
 import asyncio
+import builtins
+import secrets
 import ssl
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING
+
+import nanasqlite.exceptions as nana_exc
 from aioquic.asyncio import QuicConnectionProtocol, connect
 from aioquic.quic.configuration import QuicConfiguration
-from cryptography.hazmat.primitives.asymmetric import ed25519
-from cryptography.hazmat.primitives import serialization
-from . import protocol
-import secrets
 from colorama import Fore, Back, Style, init
+from cryptography.hazmat.primitives import serialization
+
+from . import protocol
 
 # colorama初期化（全プラットフォーム対応）
 init(autoreset=True)
-
-import nanasqlite.exceptions as nana_exc
 
 # IDE補完用
 if TYPE_CHECKING:
@@ -27,7 +28,6 @@ EXCEPTION_MAP = {
     if isinstance(obj, type) and issubclass(obj, BaseException)
 }
 # 一般的なPythonの組み込み例外も追加
-import builtins
 for _name in ["AttributeError", "TypeError", "ValueError", "KeyError", "RuntimeError", "PermissionError"]:
     EXCEPTION_MAP[_name] = getattr(builtins, _name)
 

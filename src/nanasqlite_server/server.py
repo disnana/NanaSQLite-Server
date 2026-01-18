@@ -292,9 +292,9 @@ async def main(allowed_methods=None, forbidden_methods=None):
         print(f"CRITICAL: Failed to load public key from {PUBLIC_KEY_PATH}: {e}")
         return
 
-    print(f"NanaSQLite QUIC Server starting on 127.0.0.1:4433")
-    print(f"Auth mode: Ed25519 Passkey (Challenge-Response)")
-    print(f"Security: All DB operations run in executor (non-blocking)")
+    print("NanaSQLite QUIC Server starting on 127.0.0.1:4433")
+    print("Auth mode: Ed25519 Passkey (Challenge-Response)")
+    print("Security: All DB operations run in executor (non-blocking)")
 
     await serve(
         "127.0.0.1",

@@ -1,6 +1,5 @@
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
-import os
 
 def generate_keys(prefix="nana"):
     """Ed25519の秘密鍵と公開鍵を生成して保存する"""
@@ -29,7 +28,7 @@ def generate_keys(prefix="nana"):
     with open(f"{prefix}_public.pub", "wb") as f:
         f.write(public_bytes)
         
-    print(f"Done! Created:")
+    print("Done! Created:")
     print(f" - Private Key: {prefix}_private.pem (Keep this secret!)")
     print(f" - Public Key:  {prefix}_public.pub  (Register this on the server)")
 
