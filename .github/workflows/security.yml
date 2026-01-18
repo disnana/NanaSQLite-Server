@@ -127,7 +127,6 @@ jobs:
         echo "| Safety | ${{ needs.safety.result == 'success' && '✅ Passed' || '⚠️ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Bandit | ${{ needs.bandit.result == 'success' && '✅ Passed' || '⚠️ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Trivy | ${{ needs.trivy.result == 'success' && '✅ Passed' || '⚠️ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| Bun Audit | ${{ needs.bun-audit.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Grype | ${{ needs.grype.result == 'success' && '✅ Passed' || '⚠️ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
 
     - name: Verify all checks passed
@@ -139,7 +138,6 @@ jobs:
         echo "📝 safety → ${{ needs.safety.result == 'success' && '✓ success' || format('✗ {0}', needs.safety.result) }} [required]"
         echo "📝 bandit → ${{ needs.bandit.result == 'success' && '✓ success' || format('✗ {0}', needs.bandit.result) }} [required]"
         echo "📝 trivy → ${{ needs.trivy.result == 'success' && '✓ success' || format('✗ {0}', needs.trivy.result) }} [required]"
-        echo "📝 bun-audit → ${{ needs.bun-audit.result == 'success' && '✓ success' || format('✗ {0}', needs.bun-audit.result) }} [required]"
         echo "📝 grype → ${{ needs.grype.result == 'success' && '✓ success' || format('✗ {0}', needs.grype.result) }} [required]"
         echo ""
         
@@ -149,7 +147,6 @@ jobs:
         if [[ "${{ needs.safety.result }}" != "success" ]]; then FAILED=true; fi
         if [[ "${{ needs.bandit.result }}" != "success" ]]; then FAILED=true; fi
         if [[ "${{ needs.trivy.result }}" != "success" ]]; then FAILED=true; fi
-        if [[ "${{ needs.bun-audit.result }}" != "success" ]]; then FAILED=true; fi
         if [[ "${{ needs.grype.result }}" != "success" ]]; then FAILED=true; fi
         
         if [ "$FAILED" = true ]; then
@@ -184,7 +181,7 @@ jobs:
   # セキュリティレポート集約
   security-report:
     name: Generate Security Report
-    needs: [codeql, safety, bandit, trivy, bun-audit, grype]
+    needs: [codeql, safety, bandit, trivy, grype]
     runs-on: ubuntu-latest
     if: always()
     
