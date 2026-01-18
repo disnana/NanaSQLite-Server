@@ -55,8 +55,10 @@ def ensure_test_server():
     os.environ["NANASQLITE_TEST_PORT"] = str(port)
 
     # サーバープロセスを起動
+    env = os.environ.copy()
+    env["NANASQLITE_DISABLE_BAN"] = "1"
     cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port)]
-    proc = subprocess.Popen(cmd)  # noqa: S603
+    proc = subprocess.Popen(cmd, env=env)  # noqa: S603
 
     # 起動待機（簡易）
     time.sleep(1.5)
