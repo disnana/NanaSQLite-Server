@@ -10,6 +10,8 @@ import time
 import subprocess
 import signal
 import pytest
+from filelock import FileLock
+
 
 # プロジェクトルートをパスに追加
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -34,13 +36,14 @@ def ensure_test_server():
     - 必要な証明書/鍵がない場合は自動生成
     - セッション終了時に安全に停止
     """
-    # 必要な鍵/証明書の準備
-    if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
-        from nanasqlite_server.cert_gen import generate_certificate
-        generate_certificate()
-    if not os.path.exists("nana_public.pub") or not os.path.exists("nana_private.pem"):
-        from nanasqlite_server.key_gen import generate_keys
-        generate_keys()
+    # 必要な鍵/証明書の準備 (FileLockで排他制御)
+    with FileLock("keys.lock"):
+        if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
+            from nanasqlite_server.cert_gen import generate_certificate
+            generate_certificate()
+        if not os.path.exists("nana_public.pub") or not os.path.exists("nana_private.pem"):
+            from nanasqlite_server.key_gen import generate_keys
+            generate_keys()
 
     # ポート番号の決定 (xdistワーカーIDに基づく)
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
