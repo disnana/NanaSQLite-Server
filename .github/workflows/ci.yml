@@ -25,38 +25,23 @@ jobs:
     name: Check if CI needed
     runs-on: ubuntu-latest
     outputs:
-      run_ci: ${{ steps.check.outputs.run_ci }}
+      run_ci: ${{ steps.filter.outputs.run_ci }}
     steps:
     - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
+    
     - name: Check changed files
-      id: check
-      run: |
-        # workflow_dispatch: always run
-        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-          echo "run_ci=true" >> $GITHUB_OUTPUT
-          echo "Manual trigger - CI required"
-          exit 0
-        fi
+      id: filter
+      uses: dorny/paths-filter@v3
+      with:
+        filters: |
+          run_ci:
+            - 'src/**'
+            - 'tests/**'
+            - 'pyproject.toml'
+            - 'tox.ini'
+            - 'requirements.txt'
+            - '.github/workflows/ci.yml'
 
-        # For main branch push: always run
-        if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-          echo "run_ci=true" >> $GITHUB_OUTPUT
-          echo "Main branch - CI required"
-          exit 0
-        fi
-
-        # For PRs: always run
-        if [ "${{ github.event_name }}" == "pull_request" ]; then
-          echo "run_ci=true" >> $GITHUB_OUTPUT
-          echo "PR - CI required"
-          exit 0
-        fi
-
-        # Default: run
-        echo "run_ci=true" >> $GITHUB_OUTPUT
 
   # ============================================
   # Lint Job - All branches
@@ -282,9 +267,9 @@ jobs:
   # ============================================
   check-version:
     name: Check Version
-    needs: [summary]
+    needs: [should-run, summary]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && needs.summary.result == 'success'
+    if: github.ref == 'refs/heads/main' && needs.should-run.outputs.run_ci == 'true' && needs.summary.result == 'success'
     outputs:
       should_publish: ${{ steps.check.outputs.should_publish }}
       local_version: ${{ steps.check.outputs.local_version }}
