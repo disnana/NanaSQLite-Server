@@ -22,12 +22,12 @@ dependencies = [
     "nanasqlite",
     "cryptography",
     "colorama",
-    "msgpack",
+    "ormsgpack",
 ]
 
 [project.optional-dependencies]
 speed = [
-    "msgpack",
+    "ormsgpack",
 ]
 dev = [
     "mypy",
@@ -51,3 +51,7 @@ nanasqlite-key-gen = "nanasqlite_server.key_gen:generate_keys"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.mypy.overrides]
+module = "ormsgpack"
+ignore_missing_imports = true

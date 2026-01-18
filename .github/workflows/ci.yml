@@ -162,7 +162,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv pip install --system pytest pytest-asyncio pytest-xdist apsw pydantic cryptography msgpack
+        uv pip install --system pytest pytest-asyncio pytest-xdist apsw pydantic cryptography ormsgpack
         uv pip install --system -e .[speed]
 
     # Windows: TEMP optimization + fixed parallelism

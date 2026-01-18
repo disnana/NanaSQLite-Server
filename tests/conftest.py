@@ -65,26 +65,48 @@ def ensure_test_server():
     cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port)]
     proc = subprocess.Popen(cmd, env=env)  # noqa: S603
 
-    # サーバーのポートがリッスン状態になるのを待機
-    start_time = time.time()
-    while time.time() - start_time < 10.0:
-        if proc.poll() is not None:
-            # プロセスが早々に終了してしまった
-            break
-            
-        # UDPポートが開いているか確認するのは難しいが、
-        # プロセスが生きていればまずは良しとして、少し待つ
-        time.sleep(1.0)
+    cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port)]
+    proc = subprocess.Popen(cmd, env=env)  # noqa: S603
+
+    # アクティブな起動確認 (ヘルスチェック)
+    # 実際にQUIC接続を試みて、サーバーが応答するか確認する
+    async def wait_for_server():
+        from aioquic.asyncio import connect
+        from aioquic.quic.configuration import QuicConfiguration
+        import ssl
         
-        # 本来ならUDPパケットを投げて確認したいところだが、
-        # QUICハンドシェイクは複雑なので、固定スリープの延長とプロセスの生存確認で対応
-        if time.time() - start_time > 3.0: # 最低3秒は待つ
-            break
-            
-    # プロセスが死んでいたらエラーを出力して終了
-    if proc.poll() is not None:
-        stdout, stderr = proc.communicate()
-        raise RuntimeError(f"Test server failed to start. Return code: {proc.returncode}\nStderr: {stderr}")
+        config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
+        start_wait = time.time()
+        
+        while time.time() - start_wait < 30.0:  # 最大30秒待機
+            if proc.poll() is not None:
+                return False  # プロセス終了
+                
+            try:
+                # 接続試行 (タイムアウト短め)
+                async with connect("127.0.0.1", port, configuration=config) as client:
+                    # 接続できればOK
+                    return True
+            except Exception:
+                # 接続失敗なら少し待って再試行
+                await asyncio.sleep(1.0)
+        return False
+
+    # イベントループを持ってきて実行
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    if not loop.run_until_complete(wait_for_server()):
+        if proc.poll() is not None:
+            stdout, stderr = proc.communicate()
+            raise RuntimeError(f"Test server process died. Code: {proc.returncode}\nStderr: {stderr}")
+        else:
+            proc.kill()
+            raise RuntimeError("Timed out waiting for server to start accepting connections.")
 
     try:
         yield
