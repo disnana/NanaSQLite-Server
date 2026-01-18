@@ -4,6 +4,7 @@
 
 ### 追加
 - 初回リリース
+- 許可・禁止メソッドのカスタマイズ機能の追加（プログラム起動時）
 - QUIC プロトコル (aioquic) による RPC サーバーの実装
 - Ed25519 パスキー認証の実装
 - `nanasqlite-server`, `nanasqlite-cert-gen`, `nanasqlite-key-gen` コンソールコマンドの追加

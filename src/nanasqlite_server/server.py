@@ -85,7 +85,7 @@ def get_shared_db():
 
 
 class NanaRpcProtocol(QuicConnectionProtocol):
-    def __init__(self, public_key, *args, **kwargs):
+    def __init__(self, public_key, allowed_methods=None, forbidden_methods=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.db = None
         self.authenticated = False
@@ -93,6 +93,8 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         self.client_ip = None
         self.stream_buffers = defaultdict(bytearray)
         self.public_key = public_key
+        self.allowed_methods = allowed_methods
+        self.forbidden_methods = forbidden_methods
 
     def connection_made(self, transport):
         super().connection_made(transport)
@@ -223,26 +225,35 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         if not isinstance(message, dict):
             raise ValueError("RPC message must be a dictionary")
 
-        method_name = message.get("method")
+        method_name = str(message.get("method"))
         args = message.get("args", [])
         kwargs = message.get("kwargs", {})
 
         # 動的保護:
-        # 1. 隠しメソッド( _で始まる、かつ __xx__ 形式ではないもの)を禁止
-        # 2. ブラックリストに含まれる危険なメソッドを禁止
-        # 3. NanaSQLiteのクラスで定義されている正規のメソッドかチェック (ユーザー提案)
+        # 1. カスタム許可リストがあれば優先的にチェック
+        # 2. カスタム禁止リストがあればチェック
+        # 3. デフォルトの動的保護メカニズム
 
-        is_special = method_name.startswith("__") and method_name.endswith("__")
-        allowed_special = {"__getitem__", "__setitem__", "__delitem__", "__contains__", "__len__"}
+        # 優先順位 1: カスタム許可リスト (明示的に許可されている場合は他をスキップ)
+        if self.allowed_methods and method_name in self.allowed_methods:
+            pass
+        else:
+            # 優先順位 2: カスタム禁止リスト (明示的に禁止されている場合は拒否)
+            if self.forbidden_methods and method_name in self.forbidden_methods:
+                raise PermissionError(f"Method '{method_name}' is forbidden by custom policy")
 
-        # 安全性のための厳格なチェック
-        is_nana_method = method_name in dir(NanaSQLite)
+            # 優先順位 3: デフォルトの安全制限
+            is_special = method_name.startswith("__") and method_name.endswith("__")
+            allowed_special = {"__getitem__", "__setitem__", "__delitem__", "__contains__", "__len__"}
 
-        if (method_name.startswith("_") and not is_special) or \
-           (is_special and method_name not in allowed_special) or \
-           (not is_nana_method and not is_special) or \
-           (method_name in FORBIDDEN_METHODS):
-            raise PermissionError(f"Method '{method_name}' is forbidden or invalid")
+            # 安全性のための厳格なチェック
+            is_nana_method = method_name in dir(NanaSQLite)
+
+            if (method_name.startswith("_") and not is_special) or \
+               (is_special and method_name not in allowed_special) or \
+               (not is_nana_method and not is_special) or \
+               (method_name in FORBIDDEN_METHODS):
+                raise PermissionError(f"Method '{method_name}' is forbidden or invalid")
 
         if hasattr(self.db, method_name):
             method = getattr(self.db, method_name)
@@ -270,7 +281,7 @@ def main_sync():
     except KeyboardInterrupt:
         pass
 
-async def main():
+async def main(allowed_methods=None, forbidden_methods=None):
     configuration = QuicConfiguration(is_client=False)
     configuration.load_cert_chain("cert.pem", "key.pem")
 
@@ -290,7 +301,13 @@ async def main():
         "127.0.0.1",
         4433,
         configuration=configuration,
-        create_protocol=functools.partial(NanaRpcProtocol, public_key),
+        create_protocol=lambda *args, **kwargs: NanaRpcProtocol(
+            public_key,
+            allowed_methods,
+            forbidden_methods,
+            *args,
+            **kwargs
+        ),
     )
     await asyncio.Future()
 

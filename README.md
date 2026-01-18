@@ -28,6 +28,24 @@ nanasqlite-key-gen
 nanasqlite-server
 ```
 
+### Customizing Allowed Methods
+You can customize the allowed/forbidden methods when starting the server programmatically:
+
+```python
+import asyncio
+from nanasqlite_server.server import main
+
+async def start_server():
+    # Explicitly allow 'close' and forbid '__setitem__'
+    await main(
+        allowed_methods={"close"},
+        forbidden_methods={"__setitem__"}
+    )
+
+if __name__ == "__main__":
+    asyncio.run(start_server())
+```
+
 ---
 
 ## 日本語
@@ -54,6 +72,24 @@ nanasqlite-cert-gen
 nanasqlite-key-gen
 # サーバーの起動
 nanasqlite-server
+```
+
+### 許可メソッドのカスタマイズ
+プログラムからサーバーを起動する場合、許可または禁止するメソッドをカスタマイズできます。
+
+```python
+import asyncio
+from nanasqlite_server.server import main
+
+async def start_server():
+    # 'close' を明示的に許可し、'__setitem__' を禁止する例
+    await main(
+        allowed_methods={"close"},
+        forbidden_methods={"__setitem__"}
+    )
+
+if __name__ == "__main__":
+    asyncio.run(start_server())
 ```
 
 ### クライアントの使用例
