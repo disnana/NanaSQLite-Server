@@ -1,73 +1,75 @@
 # NanaSQLite-Server
 
+[English](#english) | [日本語](#日本語)
+
+---
+
+## English
+
 A secure, high-performance, QUIC-based RPC server for [NanaSQLite](https://github.com/NanaSQLite/nanasqlite).
 
-## Features
+### ⚠️ Security Warning
+The security of this server depends on the method structure of the `NanaSQLite` class. While we use a dynamic protection mechanism, **updates to NanaSQLite may introduce new methods that could potentially bypass current security restrictions.** Always review the `FORBIDDEN_METHODS` in `server.py` when updating the underlying `nanasqlite` library.
 
+**Current Supported NanaSQLite Version:** v1.3.2
+
+### Features
 - **QUIC Protocol**: Built on top of HTTP/3 technology for low latency and high reliability.
-- **Ed25519 Passkey Authentication**: Secure challenge-response authentication using Ed25519 signatures.
-- **Dynamic Protection**: Automatically adapts to NanaSQLite updates while strictly controlling method access via blacklists and class-member verification.
+- **Ed25519 Passkey Authentication**: Secure challenge-response authentication.
+- **Dynamic Protection**: Automatically adapts to updates while strictly controlling method access.
 - **Cross-Platform**: Optimized for Windows, Linux, and macOS.
-- **Non-Blocking IO**: All database operations run in a thread pool to keep the async event loop responsive.
-- **Security Hardened**: Protected against fragmentation attacks, memory-exhaustion (DoS), and information leakage.
+- **Non-Blocking IO**: Database operations run in a thread pool.
 
-## Installation
-
+### Quick Start
 ```bash
 pip install nanasqlite-server
-```
-
-## Quick Start
-
-### 1. Generate Certificates and Keys
-
-First, generate the TLS certificate for QUIC and the Ed25519 key pair for authentication:
-
-```bash
-# Generate TLS cert (cert.pem and key.pem)
 nanasqlite-cert-gen
-
-# Generate Ed25519 keys (nana_private.pem and nana_public.pub)
 nanasqlite-key-gen
-```
-
-### 2. Start the Server
-
-```bash
 nanasqlite-server
 ```
 
-The server will look for `cert.pem`, `key.pem`, and `nana_public.pub` in the current directory.
+---
 
-### 3. Connect from Client
+## 日本語
 
+[NanaSQLite](https://github.com/NanaSQLite/nanasqlite) のためのセキュアで高速な QUIC ベースの RPC サーバーです。
+
+### ⚠️ セキュリティに関する重要な警告
+このサーバーのセキュリティは `NanaSQLite` クラスのメソッド構造に依存しています。動的な保護メカニズムを採用していますが、**NanaSQLite のアップデートにより、現在の制限を回避できる新しいメソッドが導入される可能性があります。** `nanasqlite` ライブラリを更新する際は、必ず `server.py` 内の `FORBIDDEN_METHODS` を確認し、必要に応じて更新してください。
+
+**現在対応している NanaSQLite バージョン:** v1.3.2
+
+### 特徴
+- **QUIC プロトコル**: HTTP/3 テクノロジーをベースにした低遅延で信頼性の高い通信。
+- **Ed25519 パスキー認証**: チャレンジ/レスポンス方式によるセキュアな認証。
+- **動的保護**: ライブラリの更新に自動対応しつつ、許可されたメソッドのみを実行可能。
+- **マルチプラットフォーム**: Windows, Linux, macOS に最適化。
+- **非ブロッキング I/O**: すべての DB 操作をスレッドプールで実行し、イベントループを停止させません。
+
+### クイックスタート
+```bash
+pip install nanasqlite-server
+# 証明書と鍵の生成
+nanasqlite-cert-gen
+nanasqlite-key-gen
+# サーバーの起動
+nanasqlite-server
+```
+
+### クライアントの使用例
 ```python
 import asyncio
 from nanasqlite_server.client import RemoteNanaSQLite
 
 async def main():
-    # client expects nana_private.pem in the current directory for authentication
     db = RemoteNanaSQLite(host="127.0.0.1", port=4433)
     await db.connect()
-
-    # Use it like a normal NanaSQLite instance or a dict
-    await db.set_item_async("hello", "world")
-    print(await db.get_item_async("hello"))
-
+    await db.set_item_async("key", "value")
+    print(await db.get_item_async("key"))
     await db.close()
 
 asyncio.run(main())
 ```
 
-## Security Design
-
-NanaSQLite-Server implements several layers of security:
-
-1.  **Authentication**: Every connection must prove ownership of the private key corresponding to the server's registered public key.
-2.  **Method Filtering**: Only safe, public methods defined in the `NanaSQLite` class and specific special methods (`__getitem__`, etc.) are allowed. Internal methods and raw SQL execution are blacklisted.
-3.  **Resource Management**: Stream buffers are limited to 10MB, and connection failure tracking (BAN mechanism) is capped to prevent memory exhaustion.
-4.  **Error Sanitization**: Internal server errors are masked to prevent leaking database structure or environment details.
-
 ## License
-
 MIT License
