@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import secrets
 import time
 import functools
@@ -9,7 +8,6 @@ from collections import defaultdict
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived
-from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
 from nanasqlite import NanaSQLite
 from nanasqlite.exceptions import NanaSQLiteError
@@ -117,7 +115,8 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             if not addr and hasattr(self._quic, '_peer_cid'):
                 addr = self._quic._peer_cid.host_addr
         except Exception:
-            pass
+            # 取得に失敗しても処理は継続する。詳細はデバッグログに残す。
+            logging.debug("Failed to resolve client IP from transport.", exc_info=True)
 
         self.client_ip = addr or "unknown"
         print(f"New connection from: {self.client_ip}")
@@ -279,7 +278,7 @@ def main_sync():
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass
+        logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")
 
 async def main(allowed_methods=None, forbidden_methods=None):
     configuration = QuicConfiguration(is_client=False)
@@ -316,4 +315,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass
+        logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")

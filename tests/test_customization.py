@@ -7,9 +7,6 @@ sys.path.append(os.path.join(os.getcwd(), "src"))
 
 from nanasqlite_server.server import main
 from nanasqlite_server.client import RemoteNanaSQLite
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519
-import functools
 
 async def run_test():
     # Setup: generate keys and certs if they don't exist
@@ -56,7 +53,8 @@ async def run_test():
         try:
             await server_task
         except asyncio.CancelledError:
-            pass
+            # テスト終了時のサーバータスクキャンセルを明示的に記録
+            print("Server task cancelled.")
         if os.path.exists("server_db.sqlite"):
             os.remove("server_db.sqlite")
 
