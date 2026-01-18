@@ -215,7 +215,7 @@ class TestRPCOperations:
                 "kwargs": {}
             })
             assert result.get("status") == "error"
-            assert result.get("error_type") == "AttributeError"
+            assert result.get("error_type") == "PermissionError"
         finally:
             conn.close()
             await conn.wait_closed()

@@ -18,7 +18,7 @@ init(autoreset=True)
 # IDE補完用
 if TYPE_CHECKING:
     from nanasqlite import NanaSQLite
-    Base = NanaSQLite
+    class Base(NanaSQLite): ...
 else:
     Base = object
 

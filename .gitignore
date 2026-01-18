@@ -8,3 +8,4 @@ server_db.sqlite-wal
 nana_private.pem
 nana_public.pub
 *.txt
+src/nanasqlite_server.egg-info/

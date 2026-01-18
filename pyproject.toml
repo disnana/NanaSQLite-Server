@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "nanasqlite-server"
 version = "1.0.0"
 authors = [
-  { name = "NanaSQLite-Project", email = "project@nanasqlite.example.com" },
+  { name = "NanaSQLite-Project", email = "support@disnana.com" },
 ]
 description = "A secure QUIC-based RPC server for NanaSQLite"
 readme = "README.md"
@@ -25,8 +25,8 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/NanaSQLite/nanasqlite-server"
-"Bug Tracker" = "https://github.com/NanaSQLite/nanasqlite-server/issues"
+"Homepage" = "https://github.com/disnana/nanasqlite-server"
+"Bug Tracker" = "https://github.com/disnana/nanasqlite-server/issues"
 
 [project.scripts]
 nanasqlite-server = "nanasqlite_server.server:main_sync"

@@ -20,8 +20,8 @@ BAN_DURATION = 900  # 15分 (秒)
 MAX_BAN_LIST_SIZE = 10000 # メモリ枯渇攻撃対策
 
 # BAN・失敗回数管理
-failed_attempts = {}  # {ip: count} (defaultdictから変更してサイズ管理を容易に)
-ban_list = {}  # {ip: unban_time}
+failed_attempts: dict[str, int] = {}  # {ip: count} (defaultdictから変更してサイズ管理を容易に)
+ban_list: dict[str, float] = {}  # {ip: unban_time}
 
 # スレッドプールエグゼキューター (書き込み用)
 _executor = ThreadPoolExecutor(max_workers=4)
