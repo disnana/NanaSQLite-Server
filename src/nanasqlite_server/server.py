@@ -105,7 +105,8 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         self.public_key = public_key
         self.allowed_methods = allowed_methods
         self.forbidden_methods = forbidden_methods
-        self._background_tasks = set()  # Store task references to prevent GC in Python 3.13+
+        # Store task references to prevent premature GC in Python 3.13+
+        self._background_tasks = set()
 
     def connection_made(self, transport):
         super().connection_made(transport)
@@ -135,9 +136,11 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         print(f"New connection from: {self.client_ip}", flush=True)
 
     def connection_lost(self, exc):
-        """Clean up background tasks when connection is lost"""
-        # Clear task references when connection is lost
-        # Tasks will continue to completion naturally
+        """Clean up background tasks when connection is lost
+        
+        Clear task references when connection terminates. Running tasks
+        will complete or be cancelled depending on their current state.
+        """
         self._background_tasks.clear()
         super().connection_lost(exc)
 
