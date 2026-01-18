@@ -58,14 +58,31 @@ def private_key():
 
 @asynccontextmanager
 async def create_connection():
-    """テスト用の接続を作成"""
+    """テスト用の接続を作成 (リトライ機能付き)"""
     configuration = QuicConfiguration(
         is_client=True,
         verify_mode=ssl.CERT_NONE,  # テスト用
         server_name="localhost",
     )
-    async with connect(HOST, PORT, configuration=configuration, create_protocol=ClientProtocol) as client:
-        yield client
+    
+    # 接続リトライロジック (Max 3回)
+    max_retries = 3
+    last_err = None
+    
+    for i in range(max_retries):
+        try:
+            async with connect(HOST, PORT, configuration=configuration, create_protocol=ClientProtocol) as client:
+                yield client
+            return
+        except (ConnectionError, OSError) as e:
+            last_err = e
+            # 最後の試行でなければ少し待って再試行
+            if i < max_retries - 1:
+                await asyncio.sleep(1.0)
+                continue
+    
+    # ここに来るのはリトライ失敗時
+    raise last_err
 
 
 async def authenticate(conn, private_key):

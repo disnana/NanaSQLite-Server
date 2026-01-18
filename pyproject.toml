@@ -22,12 +22,12 @@ dependencies = [
     "nanasqlite",
     "cryptography",
     "colorama",
-    "orjson",
+    "msgpack",
 ]
 
 [project.optional-dependencies]
 speed = [
-    "orjson",
+    "msgpack",
 ]
 dev = [
     "mypy",

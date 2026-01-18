@@ -8,7 +8,7 @@ import protocol
 
 PRIVATE_KEY_PATH = "nana_private.pem"
 
-class TestClientProtocol(QuicConnectionProtocol):
+class FragClientProtocol(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._responses = asyncio.Queue()
@@ -47,7 +47,7 @@ async def create_connection(host="127.0.0.1", port=4433):
         verify_mode=ssl.CERT_NONE,
         server_name="localhost",
     )
-    ctx = connect(host, port, configuration=configuration, create_protocol=TestClientProtocol)
+    ctx = connect(host, port, configuration=configuration, create_protocol=FragClientProtocol)
     connection = await ctx.__aenter__()
     return ctx, connection
 

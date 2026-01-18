@@ -65,8 +65,26 @@ def ensure_test_server():
     cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port)]
     proc = subprocess.Popen(cmd, env=env)  # noqa: S603
 
-    # 起動待機 (MacOS等での遅延を考慮して少し長めに)
-    time.sleep(5.0)
+    # サーバーのポートがリッスン状態になるのを待機
+    start_time = time.time()
+    while time.time() - start_time < 10.0:
+        if proc.poll() is not None:
+            # プロセスが早々に終了してしまった
+            break
+            
+        # UDPポートが開いているか確認するのは難しいが、
+        # プロセスが生きていればまずは良しとして、少し待つ
+        time.sleep(1.0)
+        
+        # 本来ならUDPパケットを投げて確認したいところだが、
+        # QUICハンドシェイクは複雑なので、固定スリープの延長とプロセスの生存確認で対応
+        if time.time() - start_time > 3.0: # 最低3秒は待つ
+            break
+            
+    # プロセスが死んでいたらエラーを出力して終了
+    if proc.poll() is not None:
+        stdout, stderr = proc.communicate()
+        raise RuntimeError(f"Test server failed to start. Return code: {proc.returncode}\nStderr: {stderr}")
 
     try:
         yield

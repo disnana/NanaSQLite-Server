@@ -1,9 +1,9 @@
-import orjson
+import msgpack
 import struct
 
 def encode_message(data):
     """データをシリアライズし、サイズヘッダーを付けて返す"""
-    payload = orjson.dumps(data)
+    payload = msgpack.packb(data, use_bin_type=True)
     header = struct.pack("!I", len(payload))
     return header + payload
 
@@ -18,4 +18,5 @@ def decode_message(data):
     
     payload = data[4:4+length]
     rest = data[4+length:]
-    return orjson.loads(payload), rest
+    # raw=False: strはstrとして、bytesはbytesとして復元
+    return msgpack.unpackb(payload, raw=False), rest
