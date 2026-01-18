@@ -261,6 +261,8 @@ class TestSecurity:
             async with create_connection() as conn:
                 challenge_msg = await conn.send_raw("AUTH_START")
                 challenges.append(challenge_msg.get("data"))
+            # 連続接続による競合を避けるため少し待機
+            await asyncio.sleep(0.1)
         
         # 全てのチャレンジが異なることを確認
         assert len(set(challenges)) == 3

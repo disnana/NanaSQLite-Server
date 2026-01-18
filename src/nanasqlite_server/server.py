@@ -131,7 +131,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             logging.debug("Failed to resolve client IP from transport.", exc_info=True)
 
         self.client_ip = addr or "unknown"
-        print(f"New connection from: {self.client_ip}")
+        print(f"New connection from: {self.client_ip}", flush=True)
 
 
     def quic_event_received(self, event):
