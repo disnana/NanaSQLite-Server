@@ -52,6 +52,6 @@ nanasqlite-key-gen = "nanasqlite_server.key_gen:generate_keys"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.mypy.overrides]
+[[tool.mypy.overrides]]
 module = "ormsgpack"
 ignore_missing_imports = true

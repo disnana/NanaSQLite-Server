@@ -65,8 +65,6 @@ def ensure_test_server():
     cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port)]
     proc = subprocess.Popen(cmd, env=env)  # noqa: S603
 
-    cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port)]
-    proc = subprocess.Popen(cmd, env=env)  # noqa: S603
 
     # アクティブな起動確認 (ヘルスチェック)
     # 実際にQUIC接続を試みて、サーバーが応答するか確認する
@@ -94,19 +92,19 @@ def ensure_test_server():
 
     # イベントループを持ってきて実行
     import asyncio
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     
-    if not loop.run_until_complete(wait_for_server()):
-        if proc.poll() is not None:
-            stdout, stderr = proc.communicate()
-            raise RuntimeError(f"Test server process died. Code: {proc.returncode}\nStderr: {stderr}")
-        else:
-            proc.kill()
-            raise RuntimeError("Timed out waiting for server to start accepting connections.")
+    try:
+        if not loop.run_until_complete(wait_for_server()):
+            if proc.poll() is not None:
+                stdout, stderr = proc.communicate()
+                raise RuntimeError(f"Test server process died. Code: {proc.returncode}\nStderr: {stderr}")
+            else:
+                proc.kill()
+                raise RuntimeError("Timed out waiting for server to start accepting connections.")
+    finally:
+        loop.close()
 
     try:
         yield
