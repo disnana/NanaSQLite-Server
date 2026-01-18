@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nanasqlite-server"
+version = "1.0.0"
+authors = [
+  { name = "NanaSQLite-Project", email = "project@nanasqlite.example.com" },
+]
+description = "A secure QUIC-based RPC server for NanaSQLite"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Database :: Database Engines/Servers",
+]
+dependencies = [
+    "aioquic",
+    "nanasqlite",
+    "cryptography",
+    "colorama",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/NanaSQLite/nanasqlite-server"
+"Bug Tracker" = "https://github.com/NanaSQLite/nanasqlite-server/issues"
+
+[project.scripts]
+nanasqlite-server = "nanasqlite_server.server:main_sync"
+nanasqlite-cert-gen = "nanasqlite_server.cert_gen:generate_certificate"
+nanasqlite-key-gen = "nanasqlite_server.key_gen:generate_keys"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
 from nanasqlite import NanaSQLite
 from nanasqlite.exceptions import NanaSQLiteError
-import protocol
+from . import protocol
 
 # 設定
 PUBLIC_KEY_PATH = "nana_public.pub"
@@ -158,14 +158,14 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                     self.challenge = secrets.token_bytes(32)
                     self._send_response(stream_id, {"type": "challenge", "data": self.challenge})
                     return
-                
+
                 # 認証フェーズ2: 署名の検証
                 if isinstance(message, dict) and message.get("type") == "response":
                     # チャレンジが未生成の場合は明示的に拒否
                     if self.challenge is None:
                         self._send_response(stream_id, "AUTH_FAILED")
                         return
-                    
+
                     signature = message.get("data")
                     try:
                         self.public_key.verify(signature, self.challenge)
@@ -178,15 +178,15 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                     except Exception:
                         is_now_banned = record_failed_attempt(self.client_ip)
                         print(f"Auth failed for {self.client_ip}. Attempt: {failed_attempts.get(self.client_ip, 0)}")
-                        
+
                         if is_now_banned:
                             response = "AUTH_BANNED"
                         else:
                             response = "AUTH_FAILED"
-                    
+
                     self._send_response(stream_id, response)
                     return
-                
+
                 # [FIX 3] 未認証状態で不正なメッセージを受信した場合
                 self._send_response(stream_id, {"status": "error", "message": "Unauthorized: Please start with AUTH_START"})
                 return
@@ -197,7 +197,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 if message == "AUTH_START":
                     self._send_response(stream_id, {"status": "error", "message": "Already authenticated"})
                     return
-                
+
                 result = await self.execute_rpc(message)
                 self._send_response(stream_id, result)
             else:
@@ -206,7 +206,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         except (PermissionError, ValueError, AttributeError, RuntimeError, NanaSQLiteError) as e:
             # クライアントに返しても安全なエラー (NanaSQLiteErrorを追加)
             self._send_response(stream_id, {
-                "status": "error", 
+                "status": "error",
                 "error_type": type(e).__name__,
                 "message": str(e)
             })
@@ -229,23 +229,31 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
         # 動的保護:
         # 1. 隠しメソッド( _で始まる、かつ __xx__ 形式ではないもの)を禁止
-        #    ただし、__getitem__ などの特殊メソッドは許可リストにある場合のみ
         # 2. ブラックリストに含まれる危険なメソッドを禁止
+        # 3. NanaSQLiteのクラスで定義されている正規のメソッドかチェック (ユーザー提案)
 
         is_special = method_name.startswith("__") and method_name.endswith("__")
-        if (method_name.startswith("_") and not is_special) or method_name in FORBIDDEN_METHODS:
-            raise PermissionError(f"Method '{method_name}' is forbidden")
+        allowed_special = {"__getitem__", "__setitem__", "__delitem__", "__contains__", "__len__"}
+
+        # 安全性のための厳格なチェック
+        is_nana_method = method_name in dir(NanaSQLite)
+
+        if (method_name.startswith("_") and not is_special) or \
+           (is_special and method_name not in allowed_special) or \
+           (not is_nana_method and not is_special) or \
+           (method_name in FORBIDDEN_METHODS):
+            raise PermissionError(f"Method '{method_name}' is forbidden or invalid")
 
         if hasattr(self.db, method_name):
             method = getattr(self.db, method_name)
-            
+
             # 全てのDB操作をexecutorで実行 (OSを問わずイベントループをブロッキングから守る)
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 _executor,
                 functools.partial(method, *args, **kwargs)
             )
-            
+
             return {"status": "success", "result": result}
         else:
             raise AttributeError(f"NanaSQLite object has no attribute '{method_name}'")
@@ -254,6 +262,13 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         payload = protocol.encode_message(data)
         self._quic.send_stream_data(stream_id, payload, end_stream=True)
         self.transmit()
+
+def main_sync():
+    """Entry point for console_scripts"""
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
 
 async def main():
     configuration = QuicConfiguration(is_client=False)
