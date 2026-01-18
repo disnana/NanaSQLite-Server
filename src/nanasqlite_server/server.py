@@ -134,6 +134,12 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         self.client_ip = addr or "unknown"
         print(f"New connection from: {self.client_ip}", flush=True)
 
+    def connection_lost(self, exc):
+        """Clean up background tasks when connection is lost"""
+        # Clear task references when connection is lost
+        # Tasks will continue to completion naturally
+        self._background_tasks.clear()
+        super().connection_lost(exc)
 
     def quic_event_received(self, event):
         if is_banned(self.client_ip):
