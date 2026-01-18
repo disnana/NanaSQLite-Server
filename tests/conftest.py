@@ -57,11 +57,16 @@ def ensure_test_server():
     # サーバープロセスを起動
     env = os.environ.copy()
     env["NANASQLITE_DISABLE_BAN"] = "1"
+    
+    # PYTHONPATHを明示的に設定 (カレントプロセスのsys.pathを使用)
+    python_path = os.pathsep.join(sys.path)
+    env["PYTHONPATH"] = python_path
+    
     cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port)]
     proc = subprocess.Popen(cmd, env=env)  # noqa: S603
 
-    # 起動待機（簡易）
-    time.sleep(1.5)
+    # 起動待機 (MacOS等での遅延を考慮して少し長めに)
+    time.sleep(5.0)
 
     try:
         yield
