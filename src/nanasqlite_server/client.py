@@ -5,7 +5,7 @@ from aioquic.asyncio import QuicConnectionProtocol, connect
 from aioquic.quic.configuration import QuicConfiguration
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
-import protocol
+from . import protocol
 import secrets
 from colorama import Fore, Back, Style, init
 
