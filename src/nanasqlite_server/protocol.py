@@ -1,9 +1,9 @@
-import pickle
+import orjson
 import struct
 
 def encode_message(data):
     """データをシリアライズし、サイズヘッダーを付けて返す"""
-    payload = pickle.dumps(data)
+    payload = orjson.dumps(data)
     header = struct.pack("!I", len(payload))
     return header + payload
 
@@ -18,4 +18,4 @@ def decode_message(data):
     
     payload = data[4:4+length]
     rest = data[4+length:]
-    return pickle.loads(payload), rest
+    return orjson.loads(payload), rest
