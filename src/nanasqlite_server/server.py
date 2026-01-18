@@ -105,6 +105,8 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         self.public_key = public_key
         self.allowed_methods = allowed_methods
         self.forbidden_methods = forbidden_methods
+        # Store task references to prevent premature GC in Python 3.13+
+        self._background_tasks = set()
 
     def connection_made(self, transport):
         super().connection_made(transport)
@@ -133,6 +135,14 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         self.client_ip = addr or "unknown"
         print(f"New connection from: {self.client_ip}", flush=True)
 
+    def connection_lost(self, exc):
+        """Clean up background tasks when connection is lost
+        
+        Clear task references when connection terminates. Running tasks
+        will complete or be cancelled depending on their current state.
+        """
+        self._background_tasks.clear()
+        super().connection_lost(exc)
 
     def quic_event_received(self, event):
         if is_banned(self.client_ip):
@@ -153,7 +163,10 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
             if event.end_stream:
                 data = bytes(self.stream_buffers.pop(event.stream_id))
-                asyncio.create_task(self.handle_request(event.stream_id, data))
+                # Store task reference to prevent garbage collection in Python 3.13+
+                task = asyncio.create_task(self.handle_request(event.stream_id, data))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
 
     async def handle_request(self, stream_id, data):
         try:
