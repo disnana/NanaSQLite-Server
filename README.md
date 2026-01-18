@@ -50,7 +50,7 @@ if __name__ == "__main__":
 
 ## 日本語
 
-[NanaSQLite](https://github.com/NanaSQLite/nanasqlite) のためのセキュアで高速な QUIC ベースの RPC サーバーです。
+[NanaSQLite](https://github.com/disnana/NanaSQLite/) のためのセキュアで高速な QUIC ベースの RPC サーバーです。
 
 ### ⚠️ セキュリティに関する重要な警告
 このサーバーのセキュリティは `NanaSQLite` クラスのメソッド構造に依存しています。動的な保護メカニズムを採用していますが、**NanaSQLite のアップデートにより、現在の制限を回避できる新しいメソッドが導入される可能性があります。** `nanasqlite` ライブラリを更新する際は、必ず `server.py` 内の `FORBIDDEN_METHODS` を確認し、必要に応じて更新してください。
