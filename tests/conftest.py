@@ -84,7 +84,7 @@ def ensure_test_server():
                 
             try:
                 # 接続試行 (タイムアウト短め)
-                async with connect("127.0.0.1", port, configuration=config) as client:
+                async with connect("127.0.0.1", port, configuration=config) as _:
                     # 接続できればOK
                     return True
             except Exception:
