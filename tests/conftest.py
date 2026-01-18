@@ -1,15 +1,63 @@
 """
 pytest 設定ファイル
 
-テストディレクトリからプロジェクトルートのモジュールをインポートできるようにする
+テストディレクトリからプロジェクトルート/ソースをインポートできるようにし、
+テスト実行中にサーバーをバックグラウンドで起動する。
 """
 import sys
 import os
+import time
+import subprocess
+import signal
+import pytest
 
 # プロジェクトルートをパスに追加
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+# src とパッケージディレクトリもパスに追加（tests の "import protocol" 対応）
+src_dir = os.path.join(project_root, "src")
+pkg_dir = os.path.join(src_dir, "nanasqlite_server")
+for p in (src_dir, pkg_dir):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
 # 作業ディレクトリもプロジェクトルートに変更 (private keyのパス解決のため)
 os.chdir(project_root)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def ensure_test_server():
+    """テスト用QUICサーバーをバックグラウンドで起動する。
+
+    - 必要な証明書/鍵がない場合は自動生成
+    - セッション終了時に安全に停止
+    """
+    # 必要な鍵/証明書の準備
+    if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
+        from nanasqlite_server.cert_gen import generate_certificate
+        generate_certificate()
+    if not os.path.exists("nana_public.pub") or not os.path.exists("nana_private.pem"):
+        from nanasqlite_server.key_gen import generate_keys
+        generate_keys()
+
+    # サーバープロセスを起動
+    proc = subprocess.Popen([sys.executable, "-m", "nanasqlite_server.server"])  # noqa: S603
+
+    # 起動待機（簡易）
+    time.sleep(1.5)
+
+    try:
+        yield
+    finally:
+        # 優雅に終了を試みる
+        if proc.poll() is None:
+            try:
+                proc.send_signal(signal.SIGINT)
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    proc.terminate()
+            except Exception:
+                proc.kill()
