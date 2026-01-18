@@ -21,9 +21,11 @@ from aioquic.quic.events import StreamDataReceived
 from cryptography.hazmat.primitives import serialization
 import protocol
 
+import os
+
 PRIVATE_KEY_PATH = "nana_private.pem"
 HOST = "127.0.0.1"
-PORT = 4433
+PORT = int(os.environ.get("NANASQLITE_TEST_PORT", 4433))
 
 
 class ClientProtocol(QuicConnectionProtocol):

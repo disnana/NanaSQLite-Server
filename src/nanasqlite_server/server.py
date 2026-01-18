@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives import serialization
 from nanasqlite import NanaSQLite
 from nanasqlite.exceptions import NanaSQLiteError
 from . import protocol
+import argparse
 
 # 設定
 PUBLIC_KEY_PATH = "nana_public.pub"
@@ -280,7 +281,7 @@ def main_sync():
     except KeyboardInterrupt:
         logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")
 
-async def main(allowed_methods=None, forbidden_methods=None):
+async def main(allowed_methods=None, forbidden_methods=None, port=4433):
     configuration = QuicConfiguration(is_client=False)
     configuration.load_cert_chain("cert.pem", "key.pem")
 
@@ -292,13 +293,13 @@ async def main(allowed_methods=None, forbidden_methods=None):
         print(f"CRITICAL: Failed to load public key from {PUBLIC_KEY_PATH}: {e}")
         return
 
-    print("NanaSQLite QUIC Server starting on 127.0.0.1:4433")
+    print(f"NanaSQLite QUIC Server starting on 127.0.0.1:{port}")
     print("Auth mode: Ed25519 Passkey (Challenge-Response)")
     print("Security: All DB operations run in executor (non-blocking)")
 
     await serve(
         "127.0.0.1",
-        4433,
+        port,
         configuration=configuration,
         create_protocol=lambda *args, **kwargs: NanaRpcProtocol(
             public_key,
@@ -311,8 +312,12 @@ async def main(allowed_methods=None, forbidden_methods=None):
     await asyncio.Future()
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="NanaSQLite QUIC Server")
+    parser.add_argument("--port", type=int, default=4433, help="Port to listen on")
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO)
     try:
-        asyncio.run(main())
+        asyncio.run(main(port=args.port))
     except KeyboardInterrupt:
         logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")

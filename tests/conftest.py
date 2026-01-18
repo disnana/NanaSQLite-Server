@@ -42,8 +42,21 @@ def ensure_test_server():
         from nanasqlite_server.key_gen import generate_keys
         generate_keys()
 
+    # ポート番号の決定 (xdistワーカーIDに基づく)
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
+    try:
+        worker_num = int(worker_id.replace("gw", ""))
+    except ValueError:
+        worker_num = 0
+    
+    port = 4433 + worker_num
+    
+    # テストコード側にポート番号を伝える環境変数を設定
+    os.environ["NANASQLITE_TEST_PORT"] = str(port)
+
     # サーバープロセスを起動
-    proc = subprocess.Popen([sys.executable, "-m", "nanasqlite_server.server"])  # noqa: S603
+    cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port)]
+    proc = subprocess.Popen(cmd)  # noqa: S603
 
     # 起動待機（簡易）
     time.sleep(1.5)
