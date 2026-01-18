@@ -6,7 +6,7 @@
 
 ## English
 
-A secure, high-performance, QUIC-based RPC server for [NanaSQLite](https://github.com/NanaSQLite/nanasqlite).
+A secure, high-performance, QUIC-based RPC server for [NanaSQLite](https://github.com/disnana/NanaSQLite/).
 
 ### ⚠️ Security Warning
 The security of this server depends on the method structure of the `NanaSQLite` class. While we use a dynamic protection mechanism, **updates to NanaSQLite may introduce new methods that could potentially bypass current security restrictions.** Always review the `FORBIDDEN_METHODS` in `server.py` when updating the underlying `nanasqlite` library.
