@@ -105,6 +105,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         self.public_key = public_key
         self.allowed_methods = allowed_methods
         self.forbidden_methods = forbidden_methods
+        self._background_tasks = set()  # Store task references to prevent GC in Python 3.13+
 
     def connection_made(self, transport):
         super().connection_made(transport)
@@ -153,7 +154,10 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
             if event.end_stream:
                 data = bytes(self.stream_buffers.pop(event.stream_id))
-                asyncio.create_task(self.handle_request(event.stream_id, data))
+                # Store task reference to prevent garbage collection in Python 3.13+
+                task = asyncio.create_task(self.handle_request(event.stream_id, data))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
 
     async def handle_request(self, stream_id, data):
         try:
