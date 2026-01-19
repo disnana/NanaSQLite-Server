@@ -17,8 +17,10 @@ from nanasqlite.exceptions import NanaSQLiteError
 from . import protocol
 
 def safe_log(msg):
-    """ログ出力をサニタイズして、コントロール文字（改行等）を除去する"""
-    return str(msg).replace("\n", "\\n").replace("\r", "\\r")
+    """ログ出力をサニタイズして、プリント不可能な文字を除去する（Log Injection対策）"""
+    if not isinstance(msg, str):
+        msg = str(msg)
+    return "".join(c for c in msg if c.isprintable())
 
 # --- デフォルト設定 ---
 DEFAULT_CONFIG = {
@@ -122,18 +124,10 @@ class AccountManager:
                     if not pk_path:
                         continue
 
-                    # パストラバーサル防止: ベースディレクトリ外のパスを拒否
-                    raw_joined = os.path.join(base_dir, pk_path)
-                    safe_pk_path = os.path.abspath(raw_joined)
-
-                    # os.path.commonpath を使用してより確実にチェック
-                    try:
-                        if os.path.commonpath([base_dir, safe_pk_path]) != base_dir:
-                            logging.error("Security: Path injection attempt blocked")
-                            continue
-                    except ValueError:
-                        logging.error("Security: Invalid path encountered")
-                        continue
+                    # パストラバーサル防止: ファイル名のみをベースディレクトリで解決する
+                    # 外部入力(pk_path)からディレクトリ成分を除去し、意図しない場所へのアクセスを防ぐ
+                    pk_filename = os.path.basename(pk_path)
+                    safe_pk_path = os.path.join(base_dir, pk_filename)
 
                     if os.path.exists(safe_pk_path):
                         with open(safe_pk_path, "rb") as key_f:
@@ -327,27 +321,41 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         forbidden = self.account_info["forbidden"]
 
         # 特殊メソッドの定義
-        allowed_special = {"__getitem__", "__contains__", "__len__"}
+        WRITE_SPECIAL = {"__setitem__", "__delitem__"}
+        READ_SPECIAL = {"__getitem__", "__contains__", "__len__"}
+        VALID_SPECIAL = READ_SPECIAL | WRITE_SPECIAL
 
         # 1. 禁止リストチェック (最優先)
         if method_name in forbidden:
-            raise PermissionError(f"Method '{method_name}' is forbidden for your account")
+            raise PermissionError(f"Method '{safe_log(method_name)}' is forbidden for your account")
 
         # 2. 許可リストチェック
-        if "*" not in allowed and method_name not in allowed:
-            # 特殊メソッドの例外処理 (デフォルトでは厳格に制限)
-            # 管理者以外はマジックメソッドによる書き込み等を禁止する方向
-            if method_name not in allowed_special:
-                raise PermissionError(f"Method '{method_name}' is not allowed for your account")
+        is_allowed = False
+        if "*" in allowed:
+            is_allowed = True
+        elif method_name in allowed:
+            is_allowed = True
+        elif method_name in READ_SPECIAL:
+            # 読み取り専用特殊メソッドは全アカウントにデフォルトで許可
+            is_allowed = True
+
+        if not is_allowed:
+            raise PermissionError(f"Method '{safe_log(method_name)}' is not allowed for your account")
 
         # 3. NanaSQLiteに存在するか確認 (getattrの安全な利用)
-        if method_name.startswith("_") and method_name not in allowed_special:
-             # 管理者の場合は、allowedに "*" があれば特殊メソッドも許可する
-             if "*" not in allowed:
-                raise PermissionError("Access to private attributes is forbidden")
+        # 有効な公開メソッドと、定義済みの特殊メソッドのみを対象にする
+        public_methods = {name for name in dir(NanaSQLite) if not name.startswith("_")}
+
+        if method_name in public_methods:
+            pass
+        elif method_name in VALID_SPECIAL:
+            pass
+        else:
+             # それ以外の属性アクセス（非公開属性や存在しない属性）は一律拒否
+             raise PermissionError(f"Method '{safe_log(method_name)}' is not an accessible NanaSQLite method")
 
         if not hasattr(self.db, method_name):
-            raise AttributeError(f"NanaSQLite object has no attribute '{safe_log(method_name)}'")
+            raise AttributeError("Requested method not found on NanaSQLite object")
 
         method = getattr(self.db, method_name)
         loop = asyncio.get_event_loop()

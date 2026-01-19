@@ -210,8 +210,8 @@ class TestRPCOperations:
                 "kwargs": {}
             })
             assert result.get("status") == "error"
-            # 現在の実装では詳細なerror_typeを返さずmessageに含める
-            assert "attribute" in result.get("message", "").lower()
+            # 現在の実装では属性アクセス自体を認可エラーとする
+            assert "accessible" in result.get("message", "").lower()
 
 
 # =============================================================================
