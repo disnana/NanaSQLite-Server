@@ -66,6 +66,7 @@ async def test_poc_info_disclosure_traceback():
             await client.non_existent_method()
         except Exception as e:
             msg = str(e)
+            # パス情報やファイル構造が露出していないか
             assert "/" not in msg and "\\" not in msg and "File" not in msg
     finally:
         await client.close()

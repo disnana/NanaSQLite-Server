@@ -25,8 +25,9 @@ DEFAULT_CONFIG = {
     "db_path": "server_db.sqlite",
     "max_failed_attempts": 3,
     "ban_duration": 900,
-    "max_ban_list_size": 10000,
+    "max_ban_list_size": 1000,
     "max_buffer_size": 10 * 1024 * 1024, # 10MB
+    "max_active_streams": 100,
     "accounts_file": "accounts.json"
 }
 
@@ -87,12 +88,13 @@ class AccountManager:
 
         if not os.path.exists(filepath):
             logging.warning(f"Accounts file {filepath} not found. Using default admin key if available.")
-            # デフォルトアカウント（nana_public.pubがあれば）
-            if os.path.exists("nana_public.pub"):
+            # デフォルトアカウント
+            default_key = "nana_public.pub"
+            if os.path.exists(default_key):
                 try:
-                    with open("nana_public.pub", "rb") as f:
+                    with open(default_key, "rb") as f:
                         pk_bytes = f.read()
-                        serialization.load_ssh_public_key(pk_bytes) # 有効性確認
+                        serialization.load_ssh_public_key(pk_bytes)
                         self.accounts[pk_bytes] = {
                             "name": "default_admin",
                             "allowed": ["*"],
@@ -109,12 +111,17 @@ class AccountManager:
                     pk_path = acc.get("public_key_path")
                     if not pk_path: continue
 
-                    # パストラバーサル防止: ベース名のみを使用するか、絶対パスへの正規化とチェックを行う
-                    # ここでは、設定ファイルのディレクトリを基準とした安全なパス解決を行う
-                    safe_pk_path = os.path.abspath(os.path.join(base_dir, pk_path))
-                    if not safe_pk_path.startswith(base_dir) and not os.path.exists(pk_path):
-                        # カレントディレクトリにある場合も許容（後方互換性のため）
-                        safe_pk_path = os.path.abspath(pk_path)
+                    # パストラバーサル防止: ベースディレクトリ外のパスを拒否
+                    # os.path.join 後の絶対パスが base_dir で始まっているか、
+                    # あるいは単にファイル名のみを許可する設計にする。
+                    # ここでは、base_dir 内に制限する。
+                    raw_joined = os.path.join(base_dir, pk_path)
+                    safe_pk_path = os.path.abspath(raw_joined)
+
+                    if not safe_pk_path.startswith(base_dir + os.sep) and \
+                       os.path.dirname(safe_pk_path) != base_dir:
+                        logging.error(f"Security: Path injection attempt blocked: {pk_path}")
+                        continue
 
                     if os.path.exists(safe_pk_path):
                         with open(safe_pk_path, "rb") as key_f:
@@ -178,6 +185,13 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             return
 
         if isinstance(event, StreamDataReceived):
+            # 新規ストリームの場合、同時ストリーム数制限をチェック
+            if event.stream_id not in self.stream_buffers and \
+               len(self.stream_buffers) >= self.config.get("max_active_streams", 100):
+                logging.warning(f"Closing stream {event.stream_id} due to stream limit")
+                self._quic.reset_stream(event.stream_id, 0)
+                return
+
             self.stream_buffers[event.stream_id].extend(event.data)
             if len(self.stream_buffers[event.stream_id]) > self.config["max_buffer_size"]:
                 self.stream_buffers.pop(event.stream_id)
@@ -249,11 +263,17 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 self._send_response(stream_id, result)
 
         except (PermissionError, ValueError, AttributeError, RuntimeError, NanaSQLiteError) as e:
-            # クライアントに返しても安全なエラー
+            # クライアントに返しても比較的安全なエラーだが、内容はサニタイズする
+            safe_message = str(e)
+            # パス情報が含まれやすい文字列を置換
+            for forbidden_word in [os.getcwd(), os.sep, "/"]:
+                if forbidden_word and len(forbidden_word) > 1:
+                    safe_message = safe_message.replace(forbidden_word, "[PATH]")
+
             self._send_response(stream_id, {
                 "status": "error",
                 "error_type": type(e).__name__,
-                "message": str(e)
+                "message": safe_message
             })
         except Exception as e:
             # 予期しないエラーは詳細を隠す (情報漏洩対策)
