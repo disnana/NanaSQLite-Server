@@ -9,3 +9,4 @@ nana_private.pem
 nana_public.pub
 *.txt
 src/nanasqlite_server.egg-info/
+*.lock

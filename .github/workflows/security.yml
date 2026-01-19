@@ -14,9 +14,33 @@ permissions:
   actions: read
 
 jobs:
+  # ============================================
+  # Should-Run Check
+  # ============================================
+  should-run:
+    name: Check if Security Scan needed
+    runs-on: ubuntu-latest
+    outputs:
+      run_sec: ${{ steps.filter.outputs.run_sec }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check changed files
+      id: filter
+      uses: dorny/paths-filter@v3
+      with:
+        filters: |
+          run_sec:
+            - 'src/**'
+            - 'pyproject.toml'
+            - '.github/workflows/security.yml'
+
+  # CodeQL - コードの脆弱性静的解析
   # CodeQL - コードの脆弱性静的解析
   codeql:
     name: CodeQL Analysis
+    needs: should-run
+    if: needs.should-run.outputs.run_sec == 'true'
     runs-on: ubuntu-latest
     
     steps:
@@ -35,8 +59,11 @@ jobs:
         category: "/language:python"
 
   # Safety - Python依存関係の既知脆弱性チェック
+  # Safety - Python依存関係の既知脆弱性チェック
   safety:
     name: Safety Check
+    needs: should-run
+    if: needs.should-run.outputs.run_sec == 'true'
     runs-on: ubuntu-latest
     
     steps:
@@ -61,8 +88,11 @@ jobs:
       run: pip-audit --progress-spinner=off
 
   # Bandit - Pythonセキュリティ静的解析
+  # Bandit - Pythonセキュリティ静的解析
   bandit:
     name: Bandit Security Linter
+    needs: should-run
+    if: needs.should-run.outputs.run_sec == 'true'
     runs-on: ubuntu-latest
     
     steps:
@@ -87,8 +117,11 @@ jobs:
         path: bandit-report.json
 
   # Trivy - 包括的な脆弱性スキャン
+  # Trivy - 包括的な脆弱性スキャン
   trivy:
     name: Trivy Vulnerability Scan
+    needs: should-run
+    if: needs.should-run.outputs.run_sec == 'true'
     runs-on: ubuntu-latest
     
     steps:
@@ -111,8 +144,8 @@ jobs:
 
   # セキュリティサマリー
   summary:
-    name: Security Summary
-    needs: [codeql, safety, bandit, trivy, grype]
+    name: Security Status
+    needs: [should-run, codeql, safety, bandit, trivy, grype]
     runs-on: ubuntu-latest
     if: always()
     
@@ -141,6 +174,12 @@ jobs:
         echo "📝 grype → ${{ needs.grype.result == 'success' && '✓ success' || format('✗ {0}', needs.grype.result) }} [required]"
         echo ""
         
+        # If skipped
+        if [ "${{ needs.should-run.outputs.run_sec }}" == "false" ]; then
+          echo "# ✓ Security scan was skipped (no relevant changes) 🎉"
+          exit 0
+        fi
+
         # Check for failures
         FAILED=false
         if [[ "${{ needs.codeql.result }}" != "success" ]]; then FAILED=true; fi
@@ -156,9 +195,14 @@ jobs:
           echo "# ✓ All security checks succeeded 🎉🎉🎉"
         fi
 
+
+
+  # Grype - 脆弱性スキャン (OS/Python/JS)
   # Grype - 脆弱性スキャン (OS/Python/JS)
   grype:
     name: Grype Vulnerability Scan
+    needs: should-run
+    if: needs.should-run.outputs.run_sec == 'true'
     runs-on: ubuntu-latest
     
     steps:
@@ -181,9 +225,9 @@ jobs:
   # セキュリティレポート集約
   security-report:
     name: Generate Security Report
-    needs: [codeql, safety, bandit, trivy, grype]
+    needs: [should-run, codeql, safety, bandit, trivy, grype]
     runs-on: ubuntu-latest
-    if: always()
+    if: always() && needs.should-run.outputs.run_sec == 'true'
     
     steps:
     - uses: actions/checkout@v4

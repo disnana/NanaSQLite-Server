@@ -1,5 +1,6 @@
 import asyncio
 import ssl
+import os
 from aioquic.asyncio import QuicConnectionProtocol, connect
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived
@@ -8,7 +9,7 @@ import protocol
 
 PRIVATE_KEY_PATH = "nana_private.pem"
 
-class TestClientProtocol(QuicConnectionProtocol):
+class FragClientProtocol(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._responses = asyncio.Queue()
@@ -41,13 +42,15 @@ def load_private_key():
     with open(PRIVATE_KEY_PATH, "rb") as f:
         return serialization.load_pem_private_key(f.read(), password=None)
 
-async def create_connection(host="127.0.0.1", port=4433):
+PORT = int(os.environ.get("NANASQLITE_TEST_PORT", 4433))
+
+async def create_connection(host="127.0.0.1", port=PORT):
     configuration = QuicConfiguration(
         is_client=True,
         verify_mode=ssl.CERT_NONE,
         server_name="localhost",
     )
-    ctx = connect(host, port, configuration=configuration, create_protocol=TestClientProtocol)
+    ctx = connect(host, port, configuration=configuration, create_protocol=FragClientProtocol)
     connection = await ctx.__aenter__()
     return ctx, connection
 

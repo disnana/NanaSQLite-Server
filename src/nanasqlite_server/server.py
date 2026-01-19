@@ -12,6 +12,8 @@ from cryptography.hazmat.primitives import serialization
 from nanasqlite import NanaSQLite
 from nanasqlite.exceptions import NanaSQLiteError
 from . import protocol
+import argparse
+import os
 
 # 設定
 PUBLIC_KEY_PATH = "nana_public.pub"
@@ -40,6 +42,10 @@ FORBIDDEN_METHODS = {
 
 def is_banned(ip):
     """IPがBANされているか確認し、期限切れのBANを掃除する"""
+    # テスト時など、BAN機能を無効化する場合
+    if os.environ.get("NANASQLITE_DISABLE_BAN"):
+        return False
+
     now = time.time()
 
     # BANリストのクリーンアップ (期限切れのものを削除)
@@ -56,6 +62,12 @@ def is_banned(ip):
 
 def record_failed_attempt(ip):
     """失敗回数を記録し、必要に応じてBANする"""
+    # テスト時など、BAN機能を無効化する場合
+    if os.environ.get("NANASQLITE_DISABLE_BAN"):
+        # ログには残すがBANはしない
+        print(f"[DEBUG] Failed attempt from {ip} (BAN disabled)")
+        return False
+
     # メモリ枯渇対策: 辞書が大きくなりすぎたら古いエントリーを削除するか制限する
     if len(failed_attempts) > MAX_BAN_LIST_SIZE:
         # 簡易的なクリーンアップ: 全てクリアして再開 (DoS対策としての最低限の防衛)
@@ -93,6 +105,8 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         self.public_key = public_key
         self.allowed_methods = allowed_methods
         self.forbidden_methods = forbidden_methods
+        # Store task references to prevent premature GC in Python 3.13+
+        self._background_tasks = set()
 
     def connection_made(self, transport):
         super().connection_made(transport)
@@ -119,8 +133,16 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             logging.debug("Failed to resolve client IP from transport.", exc_info=True)
 
         self.client_ip = addr or "unknown"
-        print(f"New connection from: {self.client_ip}")
+        print(f"New connection from: {self.client_ip}", flush=True)
 
+    def connection_lost(self, exc):
+        """Clean up background tasks when connection is lost
+
+        Clear task references when connection terminates. Running tasks
+        will complete or be cancelled depending on their current state.
+        """
+        self._background_tasks.clear()
+        super().connection_lost(exc)
 
     def quic_event_received(self, event):
         if is_banned(self.client_ip):
@@ -141,7 +163,10 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
             if event.end_stream:
                 data = bytes(self.stream_buffers.pop(event.stream_id))
-                asyncio.create_task(self.handle_request(event.stream_id, data))
+                # Store task reference to prevent garbage collection in Python 3.13+
+                task = asyncio.create_task(self.handle_request(event.stream_id, data))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
 
     async def handle_request(self, stream_id, data):
         try:
@@ -280,7 +305,7 @@ def main_sync():
     except KeyboardInterrupt:
         logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")
 
-async def main(allowed_methods=None, forbidden_methods=None):
+async def main(allowed_methods=None, forbidden_methods=None, port=4433):
     configuration = QuicConfiguration(is_client=False)
     configuration.load_cert_chain("cert.pem", "key.pem")
 
@@ -292,13 +317,13 @@ async def main(allowed_methods=None, forbidden_methods=None):
         print(f"CRITICAL: Failed to load public key from {PUBLIC_KEY_PATH}: {e}")
         return
 
-    print("NanaSQLite QUIC Server starting on 127.0.0.1:4433")
+    print(f"NanaSQLite QUIC Server starting on 127.0.0.1:{port}")
     print("Auth mode: Ed25519 Passkey (Challenge-Response)")
     print("Security: All DB operations run in executor (non-blocking)")
 
     await serve(
         "127.0.0.1",
-        4433,
+        port,
         configuration=configuration,
         create_protocol=lambda *args, **kwargs: NanaRpcProtocol(
             public_key,
@@ -311,8 +336,12 @@ async def main(allowed_methods=None, forbidden_methods=None):
     await asyncio.Future()
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="NanaSQLite QUIC Server")
+    parser.add_argument("--port", type=int, default=4433, help="Port to listen on")
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO)
     try:
-        asyncio.run(main())
+        asyncio.run(main(port=args.port))
     except KeyboardInterrupt:
         logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")

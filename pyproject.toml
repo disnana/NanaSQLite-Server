@@ -4,10 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nanasqlite-server"
-version = "1.0.0"
+dynamic = ["version"]
 authors = [
   { name = "NanaSQLite-Project", email = "support@disnana.com" },
 ]
+
 description = "A secure QUIC-based RPC server for NanaSQLite"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -22,6 +23,22 @@ dependencies = [
     "nanasqlite",
     "cryptography",
     "colorama",
+    "ormsgpack",
+]
+
+[project.optional-dependencies]
+speed = [
+    "ormsgpack",
+]
+dev = [
+    "mypy",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-xdist",
+    "ruff",
+    "tox",
+    "types-colorama",
+    "apsw",
 ]
 
 [project.urls]
@@ -35,3 +52,10 @@ nanasqlite-key-gen = "nanasqlite_server.key_gen:generate_keys"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[[tool.mypy.overrides]]
+module = "ormsgpack"
+ignore_missing_imports = true
+
+[tool.setuptools.dynamic]
+version = {attr = "nanasqlite_server.__version__"}
