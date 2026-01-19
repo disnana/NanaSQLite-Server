@@ -79,29 +79,32 @@ def record_failed_attempt(ip, config):
 class AccountManager:
     """アカウントと権限の管理"""
     def __init__(self, accounts_file):
-        self.accounts = {} # {public_key_bytes: {"name": str, "allowed": set, "forbidden": set}}
+        self.accounts = {} # {public_key_bytes: {"name": str, "allowed": set, "forbidden": set, "key_obj": object}}
         self.load_accounts(accounts_file)
 
     def load_accounts(self, filepath):
         """アカウント設定をロードする。パストラバーサル防止のため、鍵パスはベースディレクトリ内で解決する。"""
-        base_dir = os.path.dirname(os.path.abspath(filepath))
+        # アカウントファイルのパスを正規化
+        filepath = os.path.abspath(filepath)
+        base_dir = os.path.dirname(filepath)
 
         if not os.path.exists(filepath):
-            logging.warning(f"Accounts file {filepath} not found. Using default admin key if available.")
+            logging.warning("Accounts file not found. Using default admin key if available.")
             # デフォルトアカウント
             default_key = "nana_public.pub"
             if os.path.exists(default_key):
                 try:
                     with open(default_key, "rb") as f:
                         pk_bytes = f.read()
-                        serialization.load_ssh_public_key(pk_bytes)
+                        pk_obj = serialization.load_ssh_public_key(pk_bytes)
                         self.accounts[pk_bytes] = {
                             "name": "default_admin",
                             "allowed": ["*"],
-                            "forbidden": list(DEFAULT_FORBIDDEN_METHODS)
+                            "forbidden": list(DEFAULT_FORBIDDEN_METHODS),
+                            "key_obj": pk_obj
                         }
-                except Exception as e:
-                    logging.error(f"Failed to load default admin key: {e}")
+                except Exception:
+                    logging.error("Failed to load default admin key")
             return
 
         try:
@@ -109,30 +112,34 @@ class AccountManager:
                 data = json.load(f)
                 for acc in data:
                     pk_path = acc.get("public_key_path")
-                    if not pk_path: continue
+                    if not pk_path:
+                        continue
 
                     # パストラバーサル防止: ベースディレクトリ外のパスを拒否
-                    # os.path.join 後の絶対パスが base_dir で始まっているか、
-                    # あるいは単にファイル名のみを許可する設計にする。
-                    # ここでは、base_dir 内に制限する。
+                    # os.path.join 後の絶対パスが base_dir で始まっていることを確認
                     raw_joined = os.path.join(base_dir, pk_path)
                     safe_pk_path = os.path.abspath(raw_joined)
 
                     if not safe_pk_path.startswith(base_dir + os.sep) and \
                        os.path.dirname(safe_pk_path) != base_dir:
-                        logging.error(f"Security: Path injection attempt blocked: {pk_path}")
+                        logging.error("Security: Path injection attempt blocked")
                         continue
 
                     if os.path.exists(safe_pk_path):
                         with open(safe_pk_path, "rb") as key_f:
                             pk_content = key_f.read()
-                            self.accounts[pk_content] = {
-                                "name": acc.get("name"),
-                                "allowed": set(acc.get("allowed", [])),
-                                "forbidden": set(acc.get("forbidden", list(DEFAULT_FORBIDDEN_METHODS)))
-                            }
+                            try:
+                                pk_obj = serialization.load_ssh_public_key(pk_content)
+                                self.accounts[pk_content] = {
+                                    "name": acc.get("name"),
+                                    "allowed": set(acc.get("allowed", [])),
+                                    "forbidden": set(acc.get("forbidden", list(DEFAULT_FORBIDDEN_METHODS))),
+                                    "key_obj": pk_obj
+                                }
+                            except Exception:
+                                logging.error(f"Failed to load key for account {acc.get('name')}")
         except Exception as e:
-            logging.error(f"Failed to load accounts from {filepath}: {e}")
+            logging.error("Failed to load accounts")
 
     def get_account(self, public_key_bytes):
         return self.accounts.get(public_key_bytes)
@@ -228,12 +235,13 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                     signature = message.get("data")
                     # すべての登録済みアカウントの鍵で検証を試みる
                     found_account = None
-                    for pk_bytes, info in self.account_manager.accounts.items():
+                    for info in self.account_manager.accounts.values():
                         try:
-                            pk = serialization.load_ssh_public_key(pk_bytes)
-                            pk.verify(signature, self.challenge)
-                            found_account = info
-                            break
+                            pk = info.get("key_obj")
+                            if pk:
+                                pk.verify(signature, self.challenge)
+                                found_account = info
+                                break
                         except Exception: # nosec B112
                             continue
 
@@ -302,8 +310,9 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
         # 2. 許可リストチェック
         if "*" not in allowed and method_name not in allowed:
-            # 特殊メソッドの例外処理 (必要に応じて)
-            allowed_special = {"__getitem__", "__setitem__", "__delitem__", "__contains__", "__len__"}
+            # 特殊メソッドの例外処理 (デフォルトでは厳格に制限)
+            # 管理者以外はマジックメソッドによる書き込み等を禁止する方向
+            allowed_special = {"__getitem__", "__contains__", "__len__"}
             if method_name not in allowed_special:
                 raise PermissionError(f"Method '{method_name}' is not allowed for your account")
 
@@ -329,16 +338,24 @@ async def main():
     parser.add_argument("--config", default=".env", help="Path to config file")
     args = parser.parse_args()
 
-    # シンプルな設定ロード (本来はpython-dotenv等を使うのが望ましいが、標準ライブラリ+αで実装)
+    # パスインジェクション防止: 設定ファイルのパスを正規化
+    config_path = os.path.abspath(args.config)
+
+    # シンプルな設定ロード
     config = DEFAULT_CONFIG.copy()
-    if os.path.exists(args.config):
-        with open(args.config, "r") as f:
-            for line in f:
-                if "=" in line and not line.startswith("#"):
-                    k, v = line.strip().split("=", 1)
-                    if k in config:
-                        if isinstance(config[k], int): config[k] = int(v)
-                        else: config[k] = v
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r") as f:
+                for line in f:
+                    if "=" in line and not line.startswith("#"):
+                        parts = line.strip().split("=", 1)
+                        if len(parts) == 2:
+                            k, v = parts
+                            if k in config:
+                                if isinstance(config[k], int): config[k] = int(v)
+                                else: config[k] = v
+        except Exception as e:
+            logging.error("Failed to load config file")
 
     logging.basicConfig(level=logging.INFO)
     account_manager = AccountManager(config["accounts_file"])

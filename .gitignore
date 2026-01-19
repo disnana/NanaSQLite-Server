@@ -7,6 +7,12 @@ server_db.sqlite-shm
 server_db.sqlite-wal
 nana_private.pem
 nana_public.pub
+user_private.pem
+user_public.pub
+accounts_test.json
+vulnerability_report.md
+.env.test*
+server_db*.sqlite
 *.txt
 src/nanasqlite_server.egg-info/
 *.lock
