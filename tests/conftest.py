@@ -10,6 +10,7 @@ import time
 import subprocess
 import signal
 import pytest
+import json
 from filelock import FileLock
 
 
@@ -29,13 +30,46 @@ for p in (src_dir, pkg_dir):
 os.chdir(project_root)
 
 
+def setup_test_accounts():
+    """テスト用のアカウントと鍵を生成"""
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from cryptography.hazmat.primitives import serialization
+
+    # 一般ユーザー用キー生成
+    if not os.path.exists("user_private.pem"):
+        user_private = ed25519.Ed25519PrivateKey.generate()
+        with open("user_private.pem", "wb") as f:
+            f.write(user_private.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            ))
+        with open("user_public.pub", "wb") as f:
+            f.write(user_private.public_key().public_bytes(
+                encoding=serialization.Encoding.OpenSSH,
+                format=serialization.PublicFormat.OpenSSH
+            ))
+
+    accounts = [
+        {
+            "name": "admin",
+            "public_key_path": "nana_public.pub",
+            "allowed": ["*"],
+            "forbidden": ["close"]
+        },
+        {
+            "name": "readonly",
+            "public_key_path": "user_public.pub",
+            "allowed": ["__getitem__", "get", "keys", "values", "items", "exists"],
+            "forbidden": ["__setitem__", "drop_table", "clear"]
+        }
+    ]
+    with open("accounts_test.json", "w") as f:
+        json.dump(accounts, f)
+
 @pytest.fixture(scope="session", autouse=True)
 def ensure_test_server():
-    """テスト用QUICサーバーをバックグラウンドで起動する。
-
-    - 必要な証明書/鍵がない場合は自動生成
-    - セッション終了時に安全に停止
-    """
+    """テスト用QUICサーバーをバックグラウンドで起動する。"""
     # 必要な鍵/証明書の準備 (FileLockで排他制御)
     with FileLock("keys.lock"):
         if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
@@ -44,6 +78,7 @@ def ensure_test_server():
         if not os.path.exists("nana_public.pub") or not os.path.exists("nana_private.pem"):
             from nanasqlite_server.key_gen import generate_keys
             generate_keys()
+        setup_test_accounts()
 
     # ポート番号の決定 (xdistワーカーIDに基づく)
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
@@ -65,7 +100,16 @@ def ensure_test_server():
     python_path = os.pathsep.join(sys.path)
     env["PYTHONPATH"] = python_path
 
-    cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port)]
+    config_file = ".env.test"
+    if worker_id != "master":
+        config_file += f".{worker_id}"
+
+    with open(config_file, "w") as f:
+        f.write(f"port={port}\n")
+        f.write(f"db_path=server_db_{worker_id}.sqlite\n")
+        f.write("accounts_file=accounts_test.json\n")
+
+    cmd = [sys.executable, "-m", "nanasqlite_server.server", "--config", config_file]
     proc = subprocess.Popen(cmd, env=env)  # noqa: S603
 
 

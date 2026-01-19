@@ -19,6 +19,7 @@ The security of this server depends on the method structure of the `NanaSQLite` 
 - **Dynamic Protection**: Automatically adapts to updates while strictly controlling method access.
 - **Cross-Platform**: Optimized for Windows, Linux, and macOS.
 - **Non-Blocking IO**: Database operations run in a thread pool.
+- **RBAC (Role-Based Access Control)**: Fine-grained method access control per account.
 
 ### Quick Start
 ```bash
@@ -28,23 +29,8 @@ nanasqlite-key-gen
 nanasqlite-server
 ```
 
-### Customizing Allowed Methods
-You can customize the allowed/forbidden methods when starting the server programmatically:
-
-```python
-import asyncio
-from nanasqlite_server.server import main
-
-async def start_server():
-    # Explicitly allow 'close' and forbid '__setitem__'
-    await main(
-        allowed_methods={"close"},
-        forbidden_methods={"__setitem__"}
-    )
-
-if __name__ == "__main__":
-    asyncio.run(start_server())
-```
+### Documentation
+For detailed information on configuration and permission management, see [DOCUMENTATION.md](DOCUMENTATION.md).
 
 ---
 
@@ -63,6 +49,7 @@ if __name__ == "__main__":
 - **動的保護**: ライブラリの更新に自動対応しつつ、許可されたメソッドのみを実行可能。
 - **マルチプラットフォーム**: Windows, Linux, macOS に最適化。
 - **非ブロッキング I/O**: すべての DB 操作をスレッドプールで実行し、イベントループを停止させません。
+- **RBAC (権限管理)**: アカウントごとの詳細なメソッドアクセス制御。
 
 ### クイックスタート
 ```bash
@@ -74,23 +61,8 @@ nanasqlite-key-gen
 nanasqlite-server
 ```
 
-### 許可メソッドのカスタマイズ
-プログラムからサーバーを起動する場合、許可または禁止するメソッドをカスタマイズできます。
-
-```python
-import asyncio
-from nanasqlite_server.server import main
-
-async def start_server():
-    # 'close' を明示的に許可し、'__setitem__' を禁止する例
-    await main(
-        allowed_methods={"close"},
-        forbidden_methods={"__setitem__"}
-    )
-
-if __name__ == "__main__":
-    asyncio.run(start_server())
-```
+### ドキュメント
+設定や権限管理の詳細については、[DOCUMENTATION.md](DOCUMENTATION.md) を参照してください。
 
 ### クライアントの使用例
 ```python

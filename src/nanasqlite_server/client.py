@@ -52,7 +52,7 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
         return await self._responses.get()
 
 class RemoteNanaSQLite(Base):
-    def __init__(self, host="127.0.0.1", port=4433, ca_cert_path="cert.pem", verify_ssl=True):
+    def __init__(self, host="127.0.0.1", port=4433, ca_cert_path="cert.pem", verify_ssl=True, private_key_path=PRIVATE_KEY_PATH):
         """
         RemoteNanaSQLite クライアント
         
@@ -61,6 +61,7 @@ class RemoteNanaSQLite(Base):
             port: サーバーポート
             ca_cert_path: サーバー証明書のパス (verify_ssl=True時に使用)
             verify_ssl: SSL証明書を検証するか (本番環境ではTrueを推奨)
+            private_key_path: 秘密鍵のパス
         """
         self.host = host
         self.port = port
@@ -96,12 +97,12 @@ class RemoteNanaSQLite(Base):
         
         # 秘密鍵のロード
         try:
-            with open(PRIVATE_KEY_PATH, "rb") as f:
+            with open(private_key_path, "rb") as f:
                 self.private_key = serialization.load_pem_private_key(
                     f.read(), password=None
                 )
         except Exception as e:
-            print(f"{Fore.RED}Error loading private key: {e}{Style.RESET_ALL}")
+            print(f"{Fore.RED}Error loading private key from {private_key_path}: {e}{Style.RESET_ALL}")
             self.private_key = None
 
     async def connect(self):

@@ -1,0 +1,1 @@
+[{"name": "admin", "public_key_path": "nana_public.pub", "allowed": ["*"], "forbidden": ["close"]}, {"name": "readonly", "public_key_path": "user_public.pub", "allowed": ["__getitem__", "get", "keys", "values", "items", "exists"], "forbidden": ["__setitem__", "drop_table", "clear"]}]
