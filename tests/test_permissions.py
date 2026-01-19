@@ -1,10 +1,6 @@
-import asyncio
-import ssl
 import pytest
 import os
-import json
 from nanasqlite_server.client import RemoteNanaSQLite
-from cryptography.hazmat.primitives import serialization
 
 PORT = int(os.environ.get("NANASQLITE_TEST_PORT", 4433))
 

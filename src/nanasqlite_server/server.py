@@ -410,8 +410,11 @@ async def main():
     await asyncio.Future()
 
 def main_sync():
-    try: asyncio.run(main())
-    except KeyboardInterrupt: pass
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # ユーザーによる中断を安全に無視
+        pass
 
 if __name__ == "__main__":
     main_sync()
