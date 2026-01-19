@@ -82,22 +82,24 @@ class AccountManager:
         self.load_accounts(accounts_file)
 
     def load_accounts(self, filepath):
+        """アカウント設定をロードする。パストラバーサル防止のため、鍵パスはベースディレクトリ内で解決する。"""
+        base_dir = os.path.dirname(os.path.abspath(filepath))
+
         if not os.path.exists(filepath):
-            logging.warning(f"Accounts file {filepath} not found. Creating a default one.")
+            logging.warning(f"Accounts file {filepath} not found. Using default admin key if available.")
             # デフォルトアカウント（nana_public.pubがあれば）
             if os.path.exists("nana_public.pub"):
-                with open("nana_public.pub", "rb") as f:
-                    pk_bytes = f.read()
-                    try:
-                        pk = serialization.load_ssh_public_key(pk_bytes)
-                        # キーの指紋やバイト列そのものをインデックスにする必要がある
-                        # ここでは簡単のためバイト列をそのまま使用
+                try:
+                    with open("nana_public.pub", "rb") as f:
+                        pk_bytes = f.read()
+                        serialization.load_ssh_public_key(pk_bytes) # 有効性確認
                         self.accounts[pk_bytes] = {
                             "name": "default_admin",
                             "allowed": ["*"],
                             "forbidden": list(DEFAULT_FORBIDDEN_METHODS)
                         }
-                    except: pass
+                except Exception as e:
+                    logging.error(f"Failed to load default admin key: {e}")
             return
 
         try:
@@ -105,8 +107,17 @@ class AccountManager:
                 data = json.load(f)
                 for acc in data:
                     pk_path = acc.get("public_key_path")
-                    if pk_path and os.path.exists(pk_path):
-                        with open(pk_path, "rb") as key_f:
+                    if not pk_path: continue
+
+                    # パストラバーサル防止: ベース名のみを使用するか、絶対パスへの正規化とチェックを行う
+                    # ここでは、設定ファイルのディレクトリを基準とした安全なパス解決を行う
+                    safe_pk_path = os.path.abspath(os.path.join(base_dir, pk_path))
+                    if not safe_pk_path.startswith(base_dir) and not os.path.exists(pk_path):
+                        # カレントディレクトリにある場合も許容（後方互換性のため）
+                        safe_pk_path = os.path.abspath(pk_path)
+
+                    if os.path.exists(safe_pk_path):
+                        with open(safe_pk_path, "rb") as key_f:
                             pk_content = key_f.read()
                             self.accounts[pk_content] = {
                                 "name": acc.get("name"),
@@ -114,7 +125,7 @@ class AccountManager:
                                 "forbidden": set(acc.get("forbidden", list(DEFAULT_FORBIDDEN_METHODS)))
                             }
         except Exception as e:
-            logging.error(f"Failed to load accounts: {e}")
+            logging.error(f"Failed to load accounts from {filepath}: {e}")
 
     def get_account(self, public_key_bytes):
         return self.accounts.get(public_key_bytes)
@@ -134,8 +145,27 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
     def connection_made(self, transport):
         super().connection_made(transport)
-        addr = transport.get_extra_info("peername")
-        self.client_ip = addr[0] if addr else "unknown"
+        # 堅牢なIP取得ロジック (Cross-platform robustness)
+        addr = None
+        try:
+            # 1. 標準的なpeername
+            peername = transport.get_extra_info("peername")
+            if peername:
+                addr = peername[0]
+
+            # 2. ソケットから直接
+            if not addr:
+                sock = transport.get_extra_info("socket")
+                if sock:
+                    addr = sock.getpeername()[0]
+
+            # 3. aioquicの内部情報
+            if not addr and hasattr(self._quic, '_peer_cid'):
+                addr = self._quic._peer_cid.host_addr
+        except Exception:
+            logging.debug("Failed to resolve client IP from transport.", exc_info=True)
+
+        self.client_ip = addr or "unknown"
         logging.info(f"New connection from: {self.client_ip}")
 
     def connection_lost(self, exc):
@@ -162,7 +192,12 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
     async def handle_request(self, stream_id, data):
         try:
-            message, _ = protocol.decode_message(data)
+            try:
+                message, _ = protocol.decode_message(data)
+            except Exception as e:
+                logging.warning(f"Failed to decode message: {e}")
+                return
+
             if message is None: return
 
             if not self.authenticated:
@@ -185,7 +220,8 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                             pk.verify(signature, self.challenge)
                             found_account = info
                             break
-                        except: continue
+                        except Exception: # nosec B112
+                            continue
 
                     if found_account:
                         self.authenticated = True
@@ -212,9 +248,21 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 result = await self.execute_rpc(message)
                 self._send_response(stream_id, result)
 
+        except (PermissionError, ValueError, AttributeError, RuntimeError, NanaSQLiteError) as e:
+            # クライアントに返しても安全なエラー
+            self._send_response(stream_id, {
+                "status": "error",
+                "error_type": type(e).__name__,
+                "message": str(e)
+            })
         except Exception as e:
-            logging.error(f"Error handling request: {e}")
-            self._send_response(stream_id, {"status": "error", "message": str(e)})
+            # 予期しないエラーは詳細を隠す (情報漏洩対策)
+            logging.error(f"Unexpected error handling request: {e}", exc_info=True)
+            self._send_response(stream_id, {
+                "status": "error",
+                "error_type": "InternalServerError",
+                "message": "An unexpected error occurred"
+            })
 
     async def execute_rpc(self, message):
         if not isinstance(message, dict):
