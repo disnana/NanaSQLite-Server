@@ -16,6 +16,10 @@ from nanasqlite import NanaSQLite
 from nanasqlite.exceptions import NanaSQLiteError
 from . import protocol
 
+def safe_log(msg):
+    """ログ出力をサニタイズして、コントロール文字（改行等）を除去する"""
+    return str(msg).replace("\n", "\\n").replace("\r", "\\r")
+
 # --- デフォルト設定 ---
 DEFAULT_CONFIG = {
     "host": "127.0.0.1",
@@ -68,11 +72,14 @@ def record_failed_attempt(ip, config):
         return False
     if len(failed_attempts) > config["max_ban_list_size"]:
         failed_attempts.clear()
-    failed_attempts[ip] = failed_attempts.get(ip, 0) + 1
-    if failed_attempts[ip] >= config["max_failed_attempts"]:
+
+    # IPを文字列として安全にする
+    safe_ip = safe_log(ip)
+    failed_attempts[safe_ip] = failed_attempts.get(safe_ip, 0) + 1
+    if failed_attempts[safe_ip] >= config["max_failed_attempts"]:
         if len(ban_list) < config["max_ban_list_size"]:
-            ban_list[ip] = time.time() + config["ban_duration"]
-            logging.warning(f"IP {ip} has been BANNED")
+            ban_list[safe_ip] = time.time() + config["ban_duration"]
+            logging.warning(f"IP {safe_ip} has been BANNED")
         return True
     return False
 
@@ -85,10 +92,10 @@ class AccountManager:
     def load_accounts(self, filepath):
         """アカウント設定をロードする。パストラバーサル防止のため、鍵パスはベースディレクトリ内で解決する。"""
         # アカウントファイルのパスを正規化
-        filepath = os.path.abspath(filepath)
-        base_dir = os.path.dirname(filepath)
+        abs_filepath = os.path.abspath(filepath)
+        base_dir = os.path.dirname(abs_filepath)
 
-        if not os.path.exists(filepath):
+        if not os.path.exists(abs_filepath):
             logging.warning("Accounts file not found. Using default admin key if available.")
             # デフォルトアカウント
             default_key = "nana_public.pub"
@@ -108,7 +115,7 @@ class AccountManager:
             return
 
         try:
-            with open(filepath, "r") as f:
+            with open(abs_filepath, "r") as f:
                 data = json.load(f)
                 for acc in data:
                     pk_path = acc.get("public_key_path")
@@ -116,13 +123,16 @@ class AccountManager:
                         continue
 
                     # パストラバーサル防止: ベースディレクトリ外のパスを拒否
-                    # os.path.join 後の絶対パスが base_dir で始まっていることを確認
                     raw_joined = os.path.join(base_dir, pk_path)
                     safe_pk_path = os.path.abspath(raw_joined)
 
-                    if not safe_pk_path.startswith(base_dir + os.sep) and \
-                       os.path.dirname(safe_pk_path) != base_dir:
-                        logging.error("Security: Path injection attempt blocked")
+                    # os.path.commonpath を使用してより確実にチェック
+                    try:
+                        if os.path.commonpath([base_dir, safe_pk_path]) != base_dir:
+                            logging.error("Security: Path injection attempt blocked")
+                            continue
+                    except ValueError:
+                        logging.error("Security: Invalid path encountered")
                         continue
 
                     if os.path.exists(safe_pk_path):
@@ -179,7 +189,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         except Exception:
             logging.debug("Failed to resolve client IP from transport.", exc_info=True)
 
-        self.client_ip = addr or "unknown"
+        self.client_ip = safe_log(addr or "unknown")
         logging.info(f"New connection from: {self.client_ip}")
 
     def connection_lost(self, exc):
@@ -252,7 +262,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                         if self.client_ip in failed_attempts:
                             del failed_attempts[self.client_ip]
                         response = "AUTH_OK"
-                        logging.info(f"Auth successful: {found_account['name']} from {self.client_ip}")
+                        logging.info(f"Auth successful: {safe_log(found_account['name'])} from {self.client_ip}")
                     else:
                         is_now_banned = record_failed_attempt(self.client_ip, self.config)
                         response = "AUTH_BANNED" if is_now_banned else "AUTH_FAILED"
@@ -296,13 +306,28 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         if not isinstance(message, dict):
             raise ValueError("RPC message must be a dictionary")
 
-        method_name = str(message.get("method"))
+        # メソッド名の検証
+        method_name = message.get("method")
+        if not isinstance(method_name, str):
+            raise ValueError("Method name must be a string")
+
+        if not method_name.isidentifier() and not (method_name.startswith("__") and method_name.endswith("__")):
+            raise ValueError("Invalid method name format")
+
         args = message.get("args", [])
+        if not isinstance(args, list):
+            raise ValueError("Arguments must be a list")
+
         kwargs = message.get("kwargs", {})
+        if not isinstance(kwargs, dict):
+            raise ValueError("Keyword arguments must be a dictionary")
 
         # 権限チェック (RBAC)
         allowed = self.account_info["allowed"]
         forbidden = self.account_info["forbidden"]
+
+        # 特殊メソッドの定義
+        allowed_special = {"__getitem__", "__contains__", "__len__"}
 
         # 1. 禁止リストチェック (最優先)
         if method_name in forbidden:
@@ -312,13 +337,17 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         if "*" not in allowed and method_name not in allowed:
             # 特殊メソッドの例外処理 (デフォルトでは厳格に制限)
             # 管理者以外はマジックメソッドによる書き込み等を禁止する方向
-            allowed_special = {"__getitem__", "__contains__", "__len__"}
             if method_name not in allowed_special:
                 raise PermissionError(f"Method '{method_name}' is not allowed for your account")
 
-        # 3. NanaSQLiteに存在するか確認
+        # 3. NanaSQLiteに存在するか確認 (getattrの安全な利用)
+        if method_name.startswith("_") and method_name not in allowed_special:
+             # 管理者の場合は、allowedに "*" があれば特殊メソッドも許可する
+             if "*" not in allowed:
+                raise PermissionError("Access to private attributes is forbidden")
+
         if not hasattr(self.db, method_name):
-            raise AttributeError(f"NanaSQLite object has no attribute '{method_name}'")
+            raise AttributeError(f"NanaSQLite object has no attribute '{safe_log(method_name)}'")
 
         method = getattr(self.db, method_name)
         loop = asyncio.get_event_loop()
@@ -339,13 +368,14 @@ async def main():
     args = parser.parse_args()
 
     # パスインジェクション防止: 設定ファイルのパスを正規化
-    config_path = os.path.abspath(args.config)
+    raw_config_path = args.config
+    abs_config_path = os.path.abspath(raw_config_path)
 
     # シンプルな設定ロード
     config = DEFAULT_CONFIG.copy()
-    if os.path.exists(config_path):
+    if os.path.exists(abs_config_path):
         try:
-            with open(config_path, "r") as f:
+            with open(abs_config_path, "r") as f:
                 for line in f:
                     if "=" in line and not line.startswith("#"):
                         parts = line.strip().split("=", 1)
