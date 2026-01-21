@@ -18,20 +18,30 @@ init(autoreset=True)
 # IDE補完用
 if TYPE_CHECKING:
     from nanasqlite import NanaSQLite
+
     class Base(NanaSQLite): ...
 else:
     Base = object
 
 # NanaSQLiteの例外クラスをマッピング
 EXCEPTION_MAP = {
-    name: obj for name, obj in vars(nana_exc).items()
+    name: obj
+    for name, obj in vars(nana_exc).items()
     if isinstance(obj, type) and issubclass(obj, BaseException)
 }
 # 一般的なPythonの組み込み例外も追加
-for _name in ["AttributeError", "TypeError", "ValueError", "KeyError", "RuntimeError", "PermissionError"]:
+for _name in [
+    "AttributeError",
+    "TypeError",
+    "ValueError",
+    "KeyError",
+    "RuntimeError",
+    "PermissionError",
+]:
     EXCEPTION_MAP[_name] = getattr(builtins, _name)
 
 PRIVATE_KEY_PATH = "nana_private.pem"
+
 
 class NanaRpcClientProtocol(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs):
@@ -40,6 +50,7 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
 
     def quic_event_received(self, event):
         from aioquic.quic.events import StreamDataReceived
+
         if isinstance(event, StreamDataReceived):
             message, _ = protocol.decode_message(event.data)
             self._responses.put_nowait(message)
@@ -51,11 +62,14 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
         self.transmit()
         return await self._responses.get()
 
+
 class RemoteNanaSQLite(Base):
-    def __init__(self, host="127.0.0.1", port=4433, ca_cert_path="cert.pem", verify_ssl=True):
+    def __init__(
+        self, host="127.0.0.1", port=4433, ca_cert_path="cert.pem", verify_ssl=True
+    ):
         """
         RemoteNanaSQLite クライアント
-        
+
         Args:
             host: サーバーホスト
             port: サーバーポート
@@ -64,7 +78,7 @@ class RemoteNanaSQLite(Base):
         """
         self.host = host
         self.port = port
-        
+
         # [FIX 2] SSL証明書検証の設定
         if verify_ssl:
             self.configuration = QuicConfiguration(
@@ -76,8 +90,12 @@ class RemoteNanaSQLite(Base):
             try:
                 self.configuration.load_verify_locations(ca_cert_path)
             except Exception as e:
-                print(f"{Fore.YELLOW}Warning: Could not load CA cert: {e}{Style.RESET_ALL}")
-                print(f"{Fore.YELLOW}Falling back to CERT_NONE (insecure){Style.RESET_ALL}")
+                print(
+                    f"{Fore.YELLOW}Warning: Could not load CA cert: {e}{Style.RESET_ALL}"
+                )
+                print(
+                    f"{Fore.YELLOW}Falling back to CERT_NONE (insecure){Style.RESET_ALL}"
+                )
                 self.configuration = QuicConfiguration(
                     is_client=True,
                     verify_mode=ssl.CERT_NONE,
@@ -85,15 +103,17 @@ class RemoteNanaSQLite(Base):
                 )
         else:
             # 開発環境用: 証明書検証なし (非推奨)
-            print(f"{Fore.YELLOW}Warning: SSL verification disabled (insecure){Style.RESET_ALL}")
+            print(
+                f"{Fore.YELLOW}Warning: SSL verification disabled (insecure){Style.RESET_ALL}"
+            )
             self.configuration = QuicConfiguration(
                 is_client=True,
                 verify_mode=ssl.CERT_NONE,
                 server_name="localhost",
             )
-        
+
         self.connection = None
-        
+
         # 秘密鍵のロード
         try:
             with open(PRIVATE_KEY_PATH, "rb") as f:
@@ -104,7 +124,7 @@ class RemoteNanaSQLite(Base):
             print(f"{Fore.RED}Error loading private key: {e}{Style.RESET_ALL}")
             self.private_key = None
 
-    async def connect(self):
+    async def connect(self, account_name=None):
         """サーバーに接続し、Ed25519署名による認証を行う"""
         print(f"{Fore.CYAN}Connecting to {self.host}:{self.port}...{Style.RESET_ALL}")
         self._ctx = connect(
@@ -119,41 +139,51 @@ class RemoteNanaSQLite(Base):
         # 1. 認証開始 (チャレンジの要求)
         print(f"{Fore.YELLOW}Starting Passkey Authentication...{Style.RESET_ALL}")
         challenge_msg = await self.connection.call_rpc("AUTH_START")
-        
-        if not isinstance(challenge_msg, dict) or challenge_msg.get("type") != "challenge":
-            raise PermissionError(f"Failed to get challenge from server: {challenge_msg}")
-        
+
+        if (
+            not isinstance(challenge_msg, dict)
+            or challenge_msg.get("type") != "challenge"
+        ):
+            raise PermissionError(
+                f"Failed to get challenge from server: {challenge_msg}"
+            )
+
         challenge_data = challenge_msg.get("data")
-        
+
         # 2. 署名の生成
         signature = self.private_key.sign(challenge_data)
-        
-        # 3. 署名の送付
-        result = await self.connection.call_rpc({"type": "response", "data": signature})
-        
+
+        # 3. 署名の送付 (アカウント名ヒントがあれば含める)
+        auth_response = {"type": "response", "data": signature}
+        if account_name:
+            auth_response["account"] = account_name
+
+        result = await self.connection.call_rpc(auth_response)
+
         if result == "AUTH_OK":
             print(f"{Fore.GREEN}Authentication successful!{Style.RESET_ALL}")
         else:
             raise PermissionError(f"Authentication failed: {result}")
-            
+
         return self
 
     def __getattr__(self, name):
         async def rpc_wrapper(*args, **kwargs):
             if not self.connection:
                 await self.connect()
-            
+
             request = {"method": name, "args": args, "kwargs": kwargs}
             response = await self.connection.call_rpc(request)
-            
+
             if isinstance(response, dict) and response.get("status") == "error":
                 error_type = response.get("error_type")
                 message = response.get("message", "Unknown error")
                 # サーバー側と同じ例外クラスをインスタンス化して送出
                 exc_class = EXCEPTION_MAP.get(error_type, RuntimeError)
                 raise exc_class(message)
-            
+
             return response.get("result") if isinstance(response, dict) else response
+
         return rpc_wrapper
 
     def __setitem__(self, key, value):
@@ -185,15 +215,19 @@ class RemoteNanaSQLite(Base):
             self.connection.close()
             await self.connection.wait_closed()
 
+
 def random_uuid():
     return secrets.token_hex(16)
+
 
 # デモ
 async def example():
     client = RemoteNanaSQLite(host="127.0.0.1", port=4433)
     try:
         await client.connect()
-        print(f"{Fore.MAGENTA}Setting 'security_test' = 'Passkey Works!'{Style.RESET_ALL}")
+        print(
+            f"{Fore.MAGENTA}Setting 'security_test' = 'Passkey Works!'{Style.RESET_ALL}"
+        )
         rnd_uuid = str(random_uuid())
         temp = f"Passkey Authentication Success! (random_uuid: {rnd_uuid})"
         print(f"{Fore.BLUE}Generated random UUID: {rnd_uuid}{Style.RESET_ALL}")
@@ -209,6 +243,7 @@ async def example():
             print(f"{Fore.RED}{Back.BLACK}✗ Failed!{Style.RESET_ALL}")
     finally:
         await client.close()
+
 
 if __name__ == "__main__":
     asyncio.run(example())

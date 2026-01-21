@@ -20,7 +20,7 @@ from aioquic.asyncio import QuicConnectionProtocol, connect
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived
 from cryptography.hazmat.primitives import serialization
-import protocol
+from nanasqlite_server import protocol
 
 import os
 
@@ -31,7 +31,7 @@ PORT = int(os.environ.get("NANASQLITE_TEST_PORT", 4433))
 
 class ClientProtocol(QuicConnectionProtocol):
     """テスト用のQUICクライアントプロトコル"""
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._responses = asyncio.Queue()
@@ -64,23 +64,28 @@ async def create_connection():
         verify_mode=ssl.CERT_NONE,  # テスト用
         server_name="localhost",
     )
-    
+
     # 接続リトライロジック (Max 5回)
     max_retries = 5
     last_err = None
-    
+
     for i in range(max_retries):
         try:
-            async with connect(HOST, PORT, configuration=configuration, create_protocol=ClientProtocol) as client:
+            async with connect(
+                HOST, PORT, configuration=configuration, create_protocol=ClientProtocol
+            ) as client:
                 yield client
             return
-        except (ConnectionError, OSError) as e:
+        except (ConnectionError, OSError, asyncio.TimeoutError) as e:
             last_err = e
             # 最後の試行でなければ少し待って再試行
             if i < max_retries - 1:
+                print(
+                    f"[DEBUG] Connection attempt {i + 1} failed ({type(e).__name__}): {e}. Retrying..."
+                )
                 await asyncio.sleep(2.0)
                 continue
-    
+
     # ここに来るのはリトライ失敗時
     raise last_err
 
@@ -90,7 +95,7 @@ async def authenticate(conn, private_key):
     challenge_msg = await conn.send_raw("AUTH_START")
     assert isinstance(challenge_msg, dict)
     assert challenge_msg.get("type") == "challenge"
-    
+
     challenge = challenge_msg.get("data")
     signature = private_key.sign(challenge)
     result = await conn.send_raw({"type": "response", "data": signature})
@@ -102,9 +107,10 @@ async def authenticate(conn, private_key):
 # 認証フローのテスト
 # =============================================================================
 
+
 class TestAuthentication:
     """認証フローのテスト"""
-    
+
     @pytest.mark.asyncio
     async def test_normal_auth_flow(self, private_key):
         """正常な認証フローのテスト"""
@@ -114,7 +120,7 @@ class TestAuthentication:
             assert isinstance(challenge_msg, dict)
             assert challenge_msg.get("type") == "challenge"
             assert challenge_msg.get("data") is not None
-            
+
             # 署名して認証
             challenge = challenge_msg.get("data")
             signature = private_key.sign(challenge)
@@ -144,7 +150,7 @@ class TestAuthentication:
         """認証済み後のAUTH_STARTはエラーを返す"""
         async with create_connection() as conn:
             await authenticate(conn, private_key)
-            
+
             # 認証済み状態で再度AUTH_START
             result = await conn.send_raw("AUTH_START")
             assert isinstance(result, dict)
@@ -156,32 +162,29 @@ class TestAuthentication:
 # RPC操作のテスト
 # =============================================================================
 
+
 class TestRPCOperations:
     """RPC操作のテスト"""
-    
+
     @pytest.mark.asyncio
     async def test_set_and_get_item(self, private_key):
         """set/get操作のテスト"""
         async with create_connection() as conn:
             await authenticate(conn, private_key)
-            
+
             test_key = f"pytest_test_{time.time()}"
             test_value = {"message": "Hello from pytest!"}
-            
+
             # SET
-            result = await conn.send_raw({
-                "method": "__setitem__",
-                "args": [test_key, test_value],
-                "kwargs": {}
-            })
+            result = await conn.send_raw(
+                {"method": "__setitem__", "args": [test_key, test_value], "kwargs": {}}
+            )
             assert result.get("status") == "success"
-            
+
             # GET
-            result = await conn.send_raw({
-                "method": "__getitem__",
-                "args": [test_key],
-                "kwargs": {}
-            })
+            result = await conn.send_raw(
+                {"method": "__getitem__", "args": [test_key], "kwargs": {}}
+            )
             assert result.get("status") == "success"
             assert result.get("result") == test_value
 
@@ -189,11 +192,9 @@ class TestRPCOperations:
     async def test_unauthorized_rpc(self):
         """未認証状態でのRPC呼び出しは拒否される"""
         async with create_connection() as conn:
-            result = await conn.send_raw({
-                "method": "__getitem__",
-                "args": ["test"],
-                "kwargs": {}
-            })
+            result = await conn.send_raw(
+                {"method": "__getitem__", "args": ["test"], "kwargs": {}}
+            )
             assert isinstance(result, dict)
             assert result.get("status") == "error"
             assert "unauthorized" in result.get("message", "").lower()
@@ -203,12 +204,10 @@ class TestRPCOperations:
         """存在しないメソッドはエラー"""
         async with create_connection() as conn:
             await authenticate(conn, private_key)
-            
-            result = await conn.send_raw({
-                "method": "nonexistent_method",
-                "args": [],
-                "kwargs": {}
-            })
+
+            result = await conn.send_raw(
+                {"method": "nonexistent_method", "args": [], "kwargs": {}}
+            )
             assert result.get("status") == "error"
             assert result.get("error_type") == "PermissionError"
 
@@ -217,36 +216,52 @@ class TestRPCOperations:
 # ブロッキング検証テスト
 # =============================================================================
 
+
 class TestBlocking:
     """ブロッキング動作のテスト"""
-    
+
     @pytest.mark.asyncio
     async def test_concurrent_writes(self, private_key):
         """複数クライアントの同時書き込みが並列実行される"""
-        
+
         async def write_client(client_id: int):
             async with create_connection() as conn:
                 await authenticate(conn, private_key)
-                
+
                 start = time.perf_counter()
                 for i in range(5):
-                    await conn.send_raw({
-                        "method": "__setitem__",
-                        "args": [f"concurrent_test_{client_id}_{i}", {"data": "x" * 100}],
-                        "kwargs": {}
-                    })
+                    await conn.send_raw(
+                        {
+                            "method": "__setitem__",
+                            "args": [
+                                f"concurrent_test_{client_id}_{i}",
+                                {"data": "x" * 100},
+                            ],
+                            "kwargs": {},
+                        }
+                    )
                 elapsed = time.perf_counter() - start
                 return client_id, elapsed
-        
+
         start_total = time.perf_counter()
-        results = await asyncio.gather(
-            write_client(1),
-            write_client(2),
-            write_client(3),
-            return_exceptions=True
-        )
+        # pytestのハングを防ぐため、gather自体にもタイムアウトを設定
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    write_client(1),
+                    write_client(2),
+                    write_client(3),
+                    return_exceptions=True,
+                ),
+                timeout=30.0,  # 十分な時間
+            )
+        except asyncio.TimeoutError:
+            pytest.fail(
+                "test_concurrent_writes timed out (possible deadlock or server hang)"
+            )
+
         total_elapsed = time.perf_counter() - start_total
-        
+
         # エラーがないことを確認
         # エラーがないことを確認
         for result in results:
@@ -254,14 +269,14 @@ class TestBlocking:
                 # エラーの詳細（タイプとメッセージ）を表示してアサーション失敗させる
                 error_msg = f"{type(result).__name__}: {result}"
                 pytest.fail(f"Concurrent write failed: {error_msg}")
-        
+
         # 各クライアントの処理時間
         individual_times = [r[1] for r in results]
         sum_individual = sum(individual_times)
-        
+
         # 並列実行されていれば、合計時間は個別時間の合計より短いはず
         print(f"Total: {total_elapsed:.3f}s, Sum of individual: {sum_individual:.3f}s")
-        
+
         # 少なくとも全てのクライアントが完了していることを確認
         assert len(results) == 3
 
@@ -270,19 +285,20 @@ class TestBlocking:
 # セキュリティテスト
 # =============================================================================
 
+
 class TestSecurity:
     """セキュリティ関連のテスト"""
-    
+
     @pytest.mark.asyncio
     async def test_challenge_is_random(self):
         """チャレンジはランダムである"""
         challenges = []
-        
+
         async with create_connection() as conn:
             for _ in range(3):
                 challenge_msg = await conn.send_raw("AUTH_START")
                 challenges.append(challenge_msg.get("data"))
-        
+
         # 全てのチャレンジが異なることを確認
         assert len(set(challenges)) == 3
 
@@ -293,7 +309,9 @@ class TestSecurity:
             result = await conn.send_raw({"invalid": "format"})
             assert isinstance(result, dict)
             # エラーまたは未認証応答が返される
-            assert result.get("status") == "error" or "unauthorized" in str(result).lower()
+            assert (
+                result.get("status") == "error" or "unauthorized" in str(result).lower()
+            )
 
 
 if __name__ == "__main__":
