@@ -144,6 +144,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         self.challenge = None
         self.client_ip = None
         self.stream_buffers = defaultdict(bytearray)
+        # Store task references to prevent premature GC in Python 3.13+
         self._background_tasks = set()
 
     def connection_made(self, transport):
@@ -165,6 +166,11 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         safe_log(f"Connection from: {self.client_ip}")
 
     def connection_lost(self, exc):
+        """Clean up background tasks when connection is lost
+        
+        Clear task references when connection terminates. Running tasks
+        will complete or be cancelled depending on their current state.
+        """
         self._background_tasks.clear()
         super().connection_lost(exc)
 
