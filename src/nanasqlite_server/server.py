@@ -102,6 +102,11 @@ FORBIDDEN_METHODS = {
 }
 
 def is_banned(ip, config):
+    """Check if IP is banned and clean up expired bans."""
+    # Allow disabling ban functionality for testing
+    if os.environ.get("NANASQLITE_DISABLE_BAN"):
+        return False
+    
     now = time.time()
     expired_bans = [addr for addr, expire in ban_list.items() if now >= expire]
     for addr in expired_bans:
@@ -111,6 +116,14 @@ def is_banned(ip, config):
     return ip in ban_list
 
 def record_failed_attempt(ip, config):
+    """Record failed authentication attempt and ban if threshold exceeded."""
+    # Allow disabling ban functionality for testing
+    if os.environ.get("NANASQLITE_DISABLE_BAN"):
+        # Log but don't ban
+        safe_log(f"[DEBUG] Failed attempt from {ip} (BAN disabled)")
+        return False
+    
+    # Memory exhaustion protection: clear if dict gets too large
     if len(failed_attempts) > config.max_ban_list_size:
         failed_attempts.clear()
     failed_attempts[ip] = failed_attempts.get(ip, 0) + 1
@@ -186,6 +199,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 return
             if event.end_stream:
                 data = bytes(self.stream_buffers.pop(event.stream_id))
+                # Store task reference to prevent garbage collection in Python 3.13+
                 task = asyncio.create_task(self.handle_request(event.stream_id, data))
                 self._background_tasks.add(task)
                 task.add_done_callback(self._background_tasks.discard)
