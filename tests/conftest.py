@@ -69,12 +69,15 @@ def ensure_test_server():
     
     cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port)]
 
+    # パイプ詰まりによるハングアップを防ぐため、出力をファイルにリダイレクト
+    log_file = open(f"server_log_{worker_id}.log", "w", encoding="utf-8")
+
     # Windows では新しいプロセスグループを作成してシグナルを送りやすくする
     kwargs = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
-    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs)  # noqa: S603
+    proc = subprocess.Popen(cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True, **kwargs)  # noqa: S603
 
     # アクティブな起動確認 (ヘルスチェック)
     # 実際にQUIC接続を試みて、サーバーが応答するか確認する
@@ -108,8 +111,10 @@ def ensure_test_server():
 
         if not success:
             if proc.poll() is not None:
-                stdout, stderr = proc.communicate()
-                raise RuntimeError(f"Test server process died. Code: {proc.returncode}\nStdout: {stdout}\nStderr: {stderr}")
+                log_file.close()
+                with open(f"server_log_{worker_id}.log", "r", encoding="utf-8") as f:
+                    log_content = f.read()
+                raise RuntimeError(f"Test server process died. Code: {proc.returncode}\nLog:\n{log_content}")
             else:
                 proc.kill()
                 raise RuntimeError("Timed out waiting for server to start accepting connections.")
@@ -138,3 +143,6 @@ def ensure_test_server():
             except Exception:
                 proc.kill()
                 proc.wait()
+
+        # プロセス終了後にログファイルを閉じる
+        log_file.close()

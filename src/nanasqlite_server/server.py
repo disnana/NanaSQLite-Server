@@ -34,6 +34,9 @@ ban_list: dict[str, float] = {}  # {ip: unban_time}
 
 # スレッドプールエグゼキューター (書き込み用) - プロセス終了時に適切に片付けられるように
 _executor = None
+# GC対策: 強参照を保持するためのグローバルセット
+_active_tasks = set()
+_server = None
 
 def get_executor():
     """共有スレッドプールエグゼキューターを取得 (遅延初期化)"""
@@ -369,11 +372,10 @@ def main_sync():
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, asyncio.CancelledError):
-        # Treat user-initiated cancellation as a normal shutdown without a traceback
-        logging.info("Server interrupted by user, shutting down.")
+        pass
 
 async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_config="accounts.json"):
-    global _executor
+    global _executor, _server
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -405,11 +407,14 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
 
     # アカウント情報の監視を開始
     account_manager.start_watching()
+    # GC対策: account_manager のタスクをグローバルセットでも管理
+    if account_manager._watcher_task:
+        _active_tasks.add(account_manager._watcher_task)
+        account_manager._watcher_task.add_done_callback(_active_tasks.discard)
 
-    server = None
     try:
         print(f"NanaSQLite Server ready and listening on {port}")
-        server = await serve(
+        _server = await serve(
             "127.0.0.1",
             port,
             configuration=configuration,
@@ -434,8 +439,9 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
         logging.info("Server shutting down...")
 
         # サーバーを停止
-        if server is not None:
-            server.close()
+        if _server is not None:
+            _server.close()
+            _server = None
 
         # 監視を停止
         await account_manager.stop_watching()

@@ -94,7 +94,7 @@ class AccountManager:
                             logging.info(f"Account config change detected: {file_path}")
                             self._do_load()
             except asyncio.CancelledError:
-                logging.debug("File watcher cancelled; exiting watch loop.")
+                pass
             except Exception as e:
                 logging.error(f"Error in file watcher: {e}")
                 # エラー発生時はポーリングに切り替え
@@ -126,9 +126,8 @@ class AccountManager:
                 self._watcher_task.cancel()
                 try:
                     await asyncio.wait_for(self._watcher_task, timeout=1.0)
-                except Exception as e:
-                    # 監視タスク強制終了時の予期しない例外はログに記録するが、停止処理自体は継続する
-                    logging.warning("Error while forcefully stopping watcher task: %s", e, exc_info=True)
+                except Exception:
+                    pass
             self._watcher_task = None
 
     def find_account_by_name(self, name):

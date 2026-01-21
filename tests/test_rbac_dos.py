@@ -61,11 +61,15 @@ async def dedicated_server(tmp_path):
                "--port", str(port),
                "--accounts", str(config_path)]
 
+        # パイプ詰まりによるハングアップを防ぐため
+        log_file_path = tmp_path / "dedicated_server.log"
+        log_file = open(log_file_path, "w", encoding="utf-8")
+
         kwargs = {}
         if sys.platform == "win32":
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
-        proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs)
+        proc = subprocess.Popen(cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True, **kwargs)
 
         async def wait_for_quic():
             config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
@@ -83,8 +87,10 @@ async def dedicated_server(tmp_path):
 
         if not await wait_for_quic():
             if proc.poll() is not None:
-                stdout, stderr = proc.communicate()
-                raise RuntimeError(f"Dedicated server process died. Code: {proc.returncode}\nStdout: {stdout}\nStderr: {stderr}")
+                log_file.close()
+                with open(log_file_path, "r", encoding="utf-8") as f:
+                    log_content = f.read()
+                raise RuntimeError(f"Dedicated server process died. Code: {proc.returncode}\nLog:\n{log_content}")
             else:
                 proc.kill()
                 raise RuntimeError("Dedicated server failed to start (QUIC check failed)")
@@ -106,6 +112,7 @@ async def dedicated_server(tmp_path):
             except Exception:
                 proc.kill()
                 proc.wait()
+        log_file.close()
         os.chdir(orig_cwd)
 
 @pytest.mark.asyncio
