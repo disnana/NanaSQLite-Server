@@ -304,15 +304,17 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         # 2. カスタム禁止リストがあればチェック
         # 3. デフォルトの動的保護メカニズム
 
-        # 優先順位 1: カスタム許可リスト (明示的に許可されている場合は他をスキップ)
-        if allowed_methods and method_name in allowed_methods:
-            pass
+        # 優先順位 1: カスタム許可リスト (ホワイトリスト)
+        # allowed_methods が指定されている場合、そこにないメソッドは全て拒否する
+        if allowed_methods is not None:
+            if method_name not in allowed_methods:
+                raise PermissionError(f"Method '{method_name}' is not in the allowed list for account '{current_account.name}'")
         else:
-            # 優先順位 2: カスタム禁止リスト (明示的に禁止されている場合は拒否)
+            # 優先順位 2: カスタム禁止リスト (ブラックリスト)
             if forbidden_methods and method_name in forbidden_methods:
                 raise PermissionError(f"Method '{method_name}' is forbidden for account '{current_account.name}'")
 
-            # 優先順位 3: デフォルトの安全制限
+            # 優先順位 3: デフォルトの安全制限 (ブラックリストがない、またはリストに含まれない場合)
             is_special = method_name.startswith("__") and method_name.endswith("__")
             allowed_special = {"__getitem__", "__setitem__", "__delitem__", "__contains__", "__len__"}
 
@@ -389,11 +391,12 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="NanaSQLite QUIC Server")
     parser.add_argument("--port", type=int, default=4433, help="Port to listen on")
+    parser.add_argument("--accounts", type=str, default="accounts.json", help="Path to accounts configuration file")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
     try:
-        asyncio.run(main(port=args.port))
+        asyncio.run(main(port=args.port, account_config=args.accounts))
     except KeyboardInterrupt:
         # Intentional ignore of KeyboardInterrupt to avoid crash log
         logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")
