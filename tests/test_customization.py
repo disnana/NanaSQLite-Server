@@ -8,13 +8,16 @@ sys.path.append(os.path.join(os.getcwd(), "src"))
 from nanasqlite_server.server import main
 from nanasqlite_server.client import RemoteNanaSQLite
 
+
 async def run_test():
     # Setup: generate keys and certs if they don't exist
     if not os.path.exists("cert.pem"):
         from nanasqlite_server.cert_gen import generate_certificate
+
         generate_certificate()
     if not os.path.exists("nana_public.pub"):
         from nanasqlite_server.key_gen import generate_keys
+
         generate_keys()
 
     # Define custom allowed/forbidden methods
@@ -24,7 +27,9 @@ async def run_test():
     forbidden = {"__setitem__"}
 
     # Start server in background
-    server_task = asyncio.create_task(main(allowed_methods=allowed, forbidden_methods=forbidden))
+    server_task = asyncio.create_task(
+        main(allowed_methods=allowed, forbidden_methods=forbidden)
+    )
     await asyncio.sleep(2)
 
     try:
@@ -57,6 +62,7 @@ async def run_test():
             print("Server task cancelled.")
         if os.path.exists("server_db.sqlite"):
             os.remove("server_db.sqlite")
+
 
 if __name__ == "__main__":
     asyncio.run(run_test())

@@ -1,13 +1,10 @@
 import asyncio
 import os
 import json
-import pytest
-from aioquic.asyncio import connect
-from aioquic.quic.configuration import QuicConfiguration
-import ssl
 from nanasqlite_server.client import RemoteNanaSQLite
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
+
 
 async def run_poc():
     print("[*] Starting RBAC Restriction PoC")
@@ -17,23 +14,28 @@ async def run_poc():
     public_key = private_key.public_key()
     pub_bytes = public_key.public_bytes(
         encoding=serialization.Encoding.OpenSSH,
-        format=serialization.PublicFormat.OpenSSH
+        format=serialization.PublicFormat.OpenSSH,
     ).decode()
 
     accounts_file = "accounts_poc.json"
     with open(accounts_file, "w") as f:
-        json.dump({
-            "accounts": [
-                {
-                    "name": "restricted_user",
-                    "public_key": pub_bytes,
-                    "allowed_methods": ["list_tables"], # Only list_tables allowed
-                    "forbidden_methods": None
-                }
-            ]
-        }, f)
+        json.dump(
+            {
+                "accounts": [
+                    {
+                        "name": "restricted_user",
+                        "public_key": pub_bytes,
+                        "allowed_methods": ["list_tables"],  # Only list_tables allowed
+                        "forbidden_methods": None,
+                    }
+                ]
+            },
+            f,
+        )
 
-    print(f"[*] Created account 'restricted_user' with limited permissions in {accounts_file}")
+    print(
+        f"[*] Created account 'restricted_user' with limited permissions in {accounts_file}"
+    )
 
     # 2. Connect to server
     # Note: Assumes server is running on 4433 with --accounts accounts_poc.json
@@ -67,6 +69,7 @@ async def run_poc():
         await client.close()
         if os.path.exists(accounts_file):
             os.remove(accounts_file)
+
 
 if __name__ == "__main__":
     asyncio.run(run_poc())

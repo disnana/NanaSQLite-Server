@@ -7,26 +7,37 @@ from cryptography.hazmat.primitives import serialization
 # watchfiles が環境にない場合のフォールバック（CI安定性のため）
 try:
     from watchfiles import awatch
+
     HAS_WATCHFILES = True
 except ImportError:
     HAS_WATCHFILES = False
     logging.warning("watchfiles not found, falling back to polling.")
 
+
 class Account:
-    def __init__(self, name, public_key_pem, allowed_methods=None, forbidden_methods=None):
+    def __init__(
+        self, name, public_key_pem, allowed_methods=None, forbidden_methods=None
+    ):
         self.name = name
         self.public_key_pem = public_key_pem
-        self.allowed_methods = set(allowed_methods) if allowed_methods is not None else None
-        self.forbidden_methods = set(forbidden_methods) if forbidden_methods is not None else None
+        self.allowed_methods = (
+            set(allowed_methods) if allowed_methods is not None else None
+        )
+        self.forbidden_methods = (
+            set(forbidden_methods) if forbidden_methods is not None else None
+        )
 
         # 公開鍵オブジェクトを事前にロード
         try:
             self.public_key = serialization.load_ssh_public_key(
-                public_key_pem.encode() if isinstance(public_key_pem, str) else public_key_pem
+                public_key_pem.encode()
+                if isinstance(public_key_pem, str)
+                else public_key_pem
             )
         except Exception as e:
             logging.error(f"Failed to load public key for account {name}: {e}")
             self.public_key = None
+
 
 class AccountManager:
     def __init__(self, config_path="accounts.json", default_public_key=None):
@@ -57,15 +68,19 @@ class AccountManager:
 
             new_accounts = []
             for acc_data in data.get("accounts", []):
-                new_accounts.append(Account(
-                    acc_data["name"],
-                    acc_data["public_key"],
-                    acc_data.get("allowed_methods"),
-                    acc_data.get("forbidden_methods")
-                ))
+                new_accounts.append(
+                    Account(
+                        acc_data["name"],
+                        acc_data["public_key"],
+                        acc_data.get("allowed_methods"),
+                        acc_data.get("forbidden_methods"),
+                    )
+                )
 
             self.accounts = new_accounts
-            logging.info(f"Loaded {len(self.accounts)} accounts from {self.config_path}")
+            logging.info(
+                f"Loaded {len(self.accounts)} accounts from {self.config_path}"
+            )
         except Exception as e:
             logging.error(f"Error loading accounts from {self.config_path}: {e}")
 

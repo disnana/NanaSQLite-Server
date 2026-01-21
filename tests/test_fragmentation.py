@@ -10,6 +10,7 @@ from nanasqlite_server import protocol
 PRIVATE_KEY_PATH = "nana_private.pem"
 PORT = int(os.environ.get("NANASQLITE_TEST_PORT", 4433))
 
+
 class FragClientProtocol(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -33,15 +34,17 @@ class FragClientProtocol(QuicConnectionProtocol):
         print(f"Sending fragmented message: {len(part1)} + {len(part2)} bytes")
         self._quic.send_stream_data(stream_id, part1, end_stream=False)
         self.transmit()
-        await asyncio.sleep(0.1) # Ensure separate packets
+        await asyncio.sleep(0.1)  # Ensure separate packets
         self._quic.send_stream_data(stream_id, part2, end_stream=True)
         self.transmit()
 
         return await asyncio.wait_for(self._responses.get(), timeout=5.0)
 
+
 def load_private_key():
     with open(PRIVATE_KEY_PATH, "rb") as f:
         return serialization.load_pem_private_key(f.read(), password=None)
+
 
 async def create_connection(host="127.0.0.1", port=PORT):
     configuration = QuicConfiguration(
@@ -49,9 +52,12 @@ async def create_connection(host="127.0.0.1", port=PORT):
         verify_mode=ssl.CERT_NONE,
         server_name="localhost",
     )
-    ctx = connect(host, port, configuration=configuration, create_protocol=FragClientProtocol)
+    ctx = connect(
+        host, port, configuration=configuration, create_protocol=FragClientProtocol
+    )
     connection = await ctx.__aenter__()
     return ctx, connection
+
 
 async def test_fragmentation():
     print("Testing fragmentation handling...")
@@ -60,7 +66,9 @@ async def test_fragmentation():
     try:
         # Authenticate (normally)
         stream_id = conn._quic.get_next_available_stream_id()
-        conn._quic.send_stream_data(stream_id, protocol.encode_message("AUTH_START"), end_stream=True)
+        conn._quic.send_stream_data(
+            stream_id, protocol.encode_message("AUTH_START"), end_stream=True
+        )
         conn.transmit()
         challenge_msg = await conn._responses.get()
 
@@ -76,6 +84,7 @@ async def test_fragmentation():
     finally:
         conn.close()
         await conn.wait_closed()
+
 
 if __name__ == "__main__":
     asyncio.run(test_fragmentation())

@@ -29,6 +29,7 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
 
     def quic_event_received(self, event):
         from aioquic.quic.events import StreamDataReceived
+
         if isinstance(event, StreamDataReceived):
             message, _ = protocol.decode_message(event.data)
             self._responses.put_nowait(message)
@@ -78,8 +79,13 @@ class RemoteNanaSQLite(Base):
         print(f"{Fore.YELLOW}Starting Passkey Authentication...{Style.RESET_ALL}")
         challenge_msg = await self.connection.call_rpc("AUTH_START")
 
-        if not isinstance(challenge_msg, dict) or challenge_msg.get("type") != "challenge":
-            raise PermissionError(f"Failed to get challenge from server: {challenge_msg}")
+        if (
+            not isinstance(challenge_msg, dict)
+            or challenge_msg.get("type") != "challenge"
+        ):
+            raise PermissionError(
+                f"Failed to get challenge from server: {challenge_msg}"
+            )
 
         challenge_data = challenge_msg.get("data")
 
@@ -150,17 +156,25 @@ async def example():
     client = RemoteNanaSQLite(host="127.0.0.1", port=4433)
     try:
         await client.connect()
-        print(f"{Fore.MAGENTA}Setting 'security_test' = 'Passkey Works!'{Style.RESET_ALL}")
+        print(
+            f"{Fore.MAGENTA}Setting 'security_test' = 'Passkey Works!'{Style.RESET_ALL}"
+        )
         for _ in range(100):
             rnd_uuid = str(random_uuid())
             print(f"{Fore.BLUE}Generated random UUID: {rnd_uuid}{Style.RESET_ALL}")
             table_exists = await client.table_exists("security_test")
             if not table_exists:
-                print(f"{Fore.YELLOW}Creating table 'security_test'...{Style.RESET_ALL}")
-                await client.create_table("security_test", {"id": "INTEGER PRIMARY KEY", "data": "TEXT"})
+                print(
+                    f"{Fore.YELLOW}Creating table 'security_test'...{Style.RESET_ALL}"
+                )
+                await client.create_table(
+                    "security_test", {"id": "INTEGER PRIMARY KEY", "data": "TEXT"}
+                )
                 print(f"{Fore.GREEN}Table created.{Style.RESET_ALL}")
             else:
-                print(f"{Fore.YELLOW}Table 'security_test' already exists.{Style.RESET_ALL}")
+                print(
+                    f"{Fore.YELLOW}Table 'security_test' already exists.{Style.RESET_ALL}"
+                )
             await client.set_item_async(f"id-{_}", value=rnd_uuid)
             temp = await client.get_item_async(f"id-{_}")
             print(f"{Fore.BLUE}Read back: {temp}{Style.RESET_ALL}")

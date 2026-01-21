@@ -4,6 +4,7 @@ pytest 設定ファイル
 テストディレクトリからプロジェクトルート/ソースをインポートできるようにし、
 テスト実行中にサーバーをバックグラウンドで起動する。
 """
+
 import sys
 import os
 import time
@@ -40,21 +41,18 @@ def ensure_test_server():
     with FileLock("keys.lock"):
         if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
             from nanasqlite_server.cert_gen import generate_certificate
+
             generate_certificate()
-        if not os.path.exists("nana_public.pub") or not os.path.exists("nana_private.pem"):
+        if not os.path.exists("nana_public.pub") or not os.path.exists(
+            "nana_private.pem"
+        ):
             from nanasqlite_server.key_gen import generate_keys
+
             generate_keys()
 
-    # ポート番号の決定 (xdistワーカーIDに基づく)
-    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
-    try:
-        worker_num = int(worker_id.replace("gw", ""))
-    except ValueError:
-        worker_num = 0
-    
-    # 他のプロセスやテストと衝突しないようにポート範囲をずらす
-    port = 4433 + (worker_num * 10)
-    
+    # ポート番号の決定
+    port = 4433
+
     # テストコード側にポート番号を伝える環境変数を設定
     os.environ["NANASQLITE_TEST_PORT"] = str(port)
 
@@ -64,23 +62,33 @@ def ensure_test_server():
     env["NANASQLITE_TEST_MODE"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
     env["NANASQLITE_FORCE_POLLING"] = "1"
-    
+
     # PYTHONPATHを明示的に設定 (カレントプロセスのsys.pathを使用)
     python_path = os.pathsep.join(sys.path)
     env["PYTHONPATH"] = python_path
-    
-    db_path = f"server_db_{worker_id}.sqlite"
-    cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port), "--db", db_path]
+
+    db_path = "server_db_test.sqlite"
+    cmd = [
+        sys.executable,
+        "-m",
+        "nanasqlite_server.server",
+        "--port",
+        str(port),
+        "--db",
+        db_path,
+    ]
 
     # パイプ詰まりによるハングアップを防ぐため、出力をファイルにリダイレクト
-    log_file = open(f"server_log_{worker_id}.log", "w", encoding="utf-8")
+    log_file = open("server_log_test.log", "w", encoding="utf-8")
 
     # Windows では新しいプロセスグループを作成してシグナルを送りやすくする
     kwargs = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
-    proc = subprocess.Popen(cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True, **kwargs)  # noqa: S603
+    proc = subprocess.Popen(
+        cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True, **kwargs
+    )  # noqa: S603
 
     # アクティブな起動確認 (ヘルスチェック)
     # 実際にQUIC接続を試みて、サーバーが応答するか確認する
@@ -88,14 +96,14 @@ def ensure_test_server():
         from aioquic.asyncio import connect
         from aioquic.quic.configuration import QuicConfiguration
         import ssl
-        
+
         config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
         start_wait = time.time()
-        
+
         while time.time() - start_wait < 60.0:  # 最大60秒待機 (CI環境向けに延長)
             if proc.poll() is not None:
                 return False  # プロセス終了
-                
+
             try:
                 # 接続試行
                 async with connect("127.0.0.1", port, configuration=config):
@@ -106,6 +114,7 @@ def ensure_test_server():
 
     # 起動を待機
     import asyncio
+
     try:
         # 新しいイベントループを作成して実行 (既存のループとの干渉を避ける)
         loop = asyncio.new_event_loop()
@@ -115,12 +124,16 @@ def ensure_test_server():
         if not success:
             if proc.poll() is not None:
                 log_file.close()
-                with open(f"server_log_{worker_id}.log", "r", encoding="utf-8") as f:
+                with open("server_log_test.log", "r", encoding="utf-8") as f:
                     log_content = f.read()
-                raise RuntimeError(f"Test server process died. Code: {proc.returncode}\nLog:\n{log_content}")
+                raise RuntimeError(
+                    f"Test server process died. Code: {proc.returncode}\nLog:\n{log_content}"
+                )
             else:
                 proc.kill()
-                raise RuntimeError("Timed out waiting for server to start accepting connections.")
+                raise RuntimeError(
+                    "Timed out waiting for server to start accepting connections."
+                )
     except Exception as e:
         proc.kill()
         raise e

@@ -14,21 +14,25 @@ import sys
 import signal
 import time
 
+
 # テスト用のポート (conftest.py で設定される)
 def get_port():
     return int(os.environ.get("NANASQLITE_TEST_PORT", 4433))
+
 
 @pytest.fixture
 def test_keys():
     """テスト用の Ed25519 鍵ペア"""
     from cryptography.hazmat.primitives.asymmetric import ed25519
+
     private_key = ed25519.Ed25519PrivateKey.generate()
     public_key = private_key.public_key()
     pub_bytes = public_key.public_bytes(
         encoding=serialization.Encoding.OpenSSH,
-        format=serialization.PublicFormat.OpenSSH
+        format=serialization.PublicFormat.OpenSSH,
     ).decode()
     return private_key, pub_bytes
+
 
 @pytest.fixture
 async def dedicated_server(tmp_path):
@@ -48,8 +52,9 @@ async def dedicated_server(tmp_path):
 
         # 未使用ポートの取得
         import socket
+
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.bind(('127.0.0.1', 0))
+        s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
         s.close()
 
@@ -59,10 +64,17 @@ async def dedicated_server(tmp_path):
         env["NANASQLITE_FORCE_POLLING"] = "1"
 
         db_path = tmp_path / "dedicated_server_db.sqlite"
-        cmd = [sys.executable, "-m", "nanasqlite_server.server",
-               "--port", str(port),
-               "--accounts", str(config_path),
-               "--db", str(db_path)]
+        cmd = [
+            sys.executable,
+            "-m",
+            "nanasqlite_server.server",
+            "--port",
+            str(port),
+            "--accounts",
+            str(config_path),
+            "--db",
+            str(db_path),
+        ]
 
         # パイプ詰まりによるハングアップを防ぐため
         log_file_path = tmp_path / "dedicated_server.log"
@@ -72,7 +84,9 @@ async def dedicated_server(tmp_path):
         if sys.platform == "win32":
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
-        proc = subprocess.Popen(cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True, **kwargs)
+        proc = subprocess.Popen(
+            cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True, **kwargs
+        )
 
         async def wait_for_quic():
             config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
@@ -93,10 +107,14 @@ async def dedicated_server(tmp_path):
                 log_file.close()
                 with open(log_file_path, "r", encoding="utf-8") as f:
                     log_content = f.read()
-                raise RuntimeError(f"Dedicated server process died. Code: {proc.returncode}\nLog:\n{log_content}")
+                raise RuntimeError(
+                    f"Dedicated server process died. Code: {proc.returncode}\nLog:\n{log_content}"
+                )
             else:
                 proc.kill()
-                raise RuntimeError("Dedicated server failed to start (QUIC check failed)")
+                raise RuntimeError(
+                    "Dedicated server failed to start (QUIC check failed)"
+                )
 
         yield port, config_path, priv_key_path
 
@@ -118,6 +136,7 @@ async def dedicated_server(tmp_path):
         log_file.close()
         os.chdir(orig_cwd)
 
+
 @pytest.mark.asyncio
 async def test_rbac_permissions(test_keys, dedicated_server):
     """RBAC: アカウントごとの権限制限が機能することを確認"""
@@ -125,16 +144,19 @@ async def test_rbac_permissions(test_keys, dedicated_server):
     priv, pub = test_keys
 
     with open(config_path, "w") as f:
-        json.dump({
-            "accounts": [
-                {
-                    "name": "readonly",
-                    "public_key": pub,
-                    "allowed_methods": None,
-                    "forbidden_methods": ["__setitem__"]
-                }
-            ]
-        }, f)
+        json.dump(
+            {
+                "accounts": [
+                    {
+                        "name": "readonly",
+                        "public_key": pub,
+                        "allowed_methods": None,
+                        "forbidden_methods": ["__setitem__"],
+                    }
+                ]
+            },
+            f,
+        )
 
     # 監視が反映されるまでCI環境では長めに待機
     await asyncio.sleep(2.0)
@@ -152,6 +174,7 @@ async def test_rbac_permissions(test_keys, dedicated_server):
     finally:
         await client.close()
 
+
 @pytest.mark.asyncio
 async def test_realtime_policy_update(test_keys, dedicated_server):
     """即時反映: 実行中に権限を剥奪できることを確認"""
@@ -164,7 +187,7 @@ async def test_realtime_policy_update(test_keys, dedicated_server):
                 "name": "user",
                 "public_key": pub,
                 "allowed_methods": None,
-                "forbidden_methods": []
+                "forbidden_methods": [],
             }
         ]
     }
@@ -194,13 +217,16 @@ async def test_realtime_policy_update(test_keys, dedicated_server):
     finally:
         await client.close()
 
+
 @pytest.mark.asyncio
 async def test_anti_dos_stream_limit(dedicated_server):
     """Anti-DoS: 未認証時の同時ストリーム数制限"""
     port, _, _ = dedicated_server
     config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
 
-    async with connect("127.0.0.1", port, configuration=config, create_protocol=NanaRpcClientProtocol) as conn:
+    async with connect(
+        "127.0.0.1", port, configuration=config, create_protocol=NanaRpcClientProtocol
+    ) as conn:
         # Limit is 50. We send 60 to exceed it.
         for _ in range(60):
             try:
@@ -214,9 +240,15 @@ async def test_anti_dos_stream_limit(dedicated_server):
                 break
 
         await asyncio.sleep(1.0)
-        async with connect("127.0.0.1", port, configuration=config, create_protocol=NanaRpcClientProtocol) as conn2:
+        async with connect(
+            "127.0.0.1",
+            port,
+            configuration=config,
+            create_protocol=NanaRpcClientProtocol,
+        ) as conn2:
             # New connection should still be possible
             await conn2.call_rpc("AUTH_START")
+
 
 @pytest.mark.asyncio
 async def test_anti_dos_total_buffer_limit(dedicated_server):
@@ -224,9 +256,11 @@ async def test_anti_dos_total_buffer_limit(dedicated_server):
     port, _, _ = dedicated_server
     config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
 
-    async with connect("127.0.0.1", port, configuration=config, create_protocol=NanaRpcClientProtocol) as conn:
+    async with connect(
+        "127.0.0.1", port, configuration=config, create_protocol=NanaRpcClientProtocol
+    ) as conn:
         stream_id = conn._quic.get_next_available_stream_id()
-        chunk = b"A" * (1024 * 1024) # 1MB
+        chunk = b"A" * (1024 * 1024)  # 1MB
 
         # Limit is 50MB. We send 60MB.
         for _ in range(60):
@@ -248,5 +282,10 @@ async def test_anti_dos_total_buffer_limit(dedicated_server):
             pass
 
         # New connection should still be possible
-        async with connect("127.0.0.1", port, configuration=config, create_protocol=NanaRpcClientProtocol) as conn2:
+        async with connect(
+            "127.0.0.1",
+            port,
+            configuration=config,
+            create_protocol=NanaRpcClientProtocol,
+        ) as conn2:
             await conn2.call_rpc("AUTH_START")

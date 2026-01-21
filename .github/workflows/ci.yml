@@ -147,23 +147,23 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv pip install --system pytest pytest-asyncio pytest-xdist filelock apsw pydantic cryptography ormsgpack
+        uv pip install --system pytest pytest-asyncio filelock apsw pydantic cryptography ormsgpack
         uv pip install --system -e .[speed]
 
-    # Windows: TEMP optimization + fixed parallelism
+    # Windows: TEMP optimization
     - name: Run tests (Windows)
       if: runner.os == 'Windows'
       env:
         TEMP: 'D:\temp'
         TMP: 'D:\temp'
       run: |
-        pytest tests/ -v --tb=short --junitxml=test-results.xml -n 4
+        pytest tests/ -v --tb=short --junitxml=test-results.xml
 
-    # Linux/macOS: auto parallelism
+    # Linux/macOS
     - name: Run tests (Linux/macOS)
       if: runner.os != 'Windows'
       run: |
-        pytest tests/ -v --tb=short --junitxml=test-results.xml -n auto
+        pytest tests/ -v --tb=short --junitxml=test-results.xml
 
     - name: Upload test results
       uses: actions/upload-artifact@v4
