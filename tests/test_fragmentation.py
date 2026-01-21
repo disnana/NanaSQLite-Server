@@ -7,6 +7,11 @@ from aioquic.quic.events import StreamDataReceived
 from cryptography.hazmat.primitives import serialization
 from nanasqlite_server import protocol
 
+<<<<<<< HEAD
+=======
+PRIVATE_KEY_PATH = "nana_private.pem"
+
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
 class FragClientProtocol(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -46,6 +51,12 @@ async def test_fragmentation(server_factory, certs):
         verify_mode=ssl.CERT_NONE,
         server_name="localhost",
     )
+<<<<<<< HEAD
+=======
+    ctx = connect(host, port, configuration=configuration, create_protocol=FragClientProtocol)
+    connection = await ctx.__aenter__()
+    return ctx, connection
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
 
     async with connect(config.host, config.port, configuration=configuration, create_protocol=FragClientProtocol) as conn:
         # Authenticate (normally)

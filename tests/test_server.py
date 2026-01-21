@@ -14,10 +14,18 @@ from aioquic.quic.events import StreamDataReceived
 from cryptography.hazmat.primitives import serialization
 from nanasqlite_server import protocol
 
+<<<<<<< HEAD
 # Use certs from conftest.py
 @pytest.fixture
 def private_key_path(certs):
     return certs["priv"]
+=======
+import os
+
+PRIVATE_KEY_PATH = "nana_private.pem"
+HOST = "127.0.0.1"
+PORT = int(os.environ.get("NANASQLITE_TEST_PORT", 4433))
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
 
 @pytest.fixture
 def private_key(private_key_path):
@@ -44,14 +52,50 @@ class ClientProtocol(QuicConnectionProtocol):
         self.transmit()
         return await asyncio.wait_for(self._responses.get(), timeout=timeout)
 
+<<<<<<< HEAD
 @asynccontextmanager
 async def create_connection(config):
     """テスト用の接続を作成"""
+=======
+
+@pytest.fixture
+def private_key():
+    """秘密鍵をロード"""
+    with open(PRIVATE_KEY_PATH, "rb") as f:
+        return serialization.load_pem_private_key(f.read(), password=None)
+
+
+@asynccontextmanager
+async def create_connection():
+    """テスト用の接続を作成 (リトライ機能付き)"""
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
     configuration = QuicConfiguration(
         is_client=True,
         verify_mode=ssl.CERT_NONE,
         server_name="localhost",
     )
+<<<<<<< HEAD
+=======
+    
+    # 接続リトライロジック (Max 5回)
+    max_retries = 5
+    last_err = None
+    
+    for i in range(max_retries):
+        try:
+            async with connect(HOST, PORT, configuration=configuration, create_protocol=ClientProtocol) as client:
+                yield client
+            return
+        except (ConnectionError, OSError) as e:
+            last_err = e
+            # 最後の試行でなければ少し待って再試行
+            if i < max_retries - 1:
+                await asyncio.sleep(2.0)
+                continue
+    
+    # ここに来るのはリトライ失敗時
+    raise last_err
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
 
     async with connect(config.host, config.port, configuration=configuration, create_protocol=ClientProtocol) as client:
         yield client
@@ -78,8 +122,12 @@ class TestAuthentication:
     
     async def test_normal_auth_flow(self, server_factory, private_key):
         """正常な認証フローのテスト"""
+<<<<<<< HEAD
         config = await server_factory()
         async with create_connection(config) as conn:
+=======
+        async with create_connection() as conn:
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
             # チャレンジ取得
             challenge_msg = await conn.send_raw({"type": "AUTH_START", "username": "admin"})
             assert isinstance(challenge_msg, dict)
@@ -94,26 +142,43 @@ class TestAuthentication:
 
     async def test_skip_auth_start(self, server_factory):
         """AUTH_STARTをスキップした場合は認証失敗"""
+<<<<<<< HEAD
         config = await server_factory()
         async with create_connection(config) as conn:
             # いきなりresponseを送信
             fake_signature = b"fake_signature"
             result = await conn.send_raw({"type": "response", "data": fake_signature})
             assert result == "AUTH_FAILED" or (isinstance(result, dict) and result.get("status") == "error")
+=======
+        async with create_connection() as conn:
+            # いきなりresponseを送信
+            fake_signature = b"fake_signature"
+            result = await conn.send_raw({"type": "response", "data": fake_signature})
+            assert result == "AUTH_FAILED"
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
 
     async def test_invalid_signature(self, server_factory, private_key):
         """無効な署名は拒否される"""
+<<<<<<< HEAD
         config = await server_factory()
         async with create_connection(config) as conn:
             await conn.send_raw({"type": "AUTH_START", "username": "admin"})
+=======
+        async with create_connection() as conn:
+            await conn.send_raw("AUTH_START")
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
             # 間違った署名を送信
             result = await conn.send_raw({"type": "response", "data": b"invalid"})
             assert result == "AUTH_FAILED"
 
     async def test_reauth_after_authenticated(self, server_factory, private_key):
         """認証済み後のAUTH_STARTはエラーを返す"""
+<<<<<<< HEAD
         config = await server_factory()
         async with create_connection(config) as conn:
+=======
+        async with create_connection() as conn:
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
             await authenticate(conn, private_key)
             
             # 認証済み状態で再度AUTH_START
@@ -121,6 +186,10 @@ class TestAuthentication:
             assert isinstance(result, dict)
             assert result.get("status") == "error"
             assert "authenticated" in result.get("message", "").lower()
+<<<<<<< HEAD
+=======
+
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
 
 # =============================================================================
 # RPC操作のテスト
@@ -132,8 +201,12 @@ class TestRPCOperations:
     
     async def test_set_and_get_item(self, server_factory, private_key):
         """set/get操作のテスト"""
+<<<<<<< HEAD
         config = await server_factory()
         async with create_connection(config) as conn:
+=======
+        async with create_connection() as conn:
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
             await authenticate(conn, private_key)
             
             test_key = f"pytest_test_{time.time()}"
@@ -158,8 +231,12 @@ class TestRPCOperations:
 
     async def test_unauthorized_rpc(self, server_factory):
         """未認証状態でのRPC呼び出しは拒否される"""
+<<<<<<< HEAD
         config = await server_factory()
         async with create_connection(config) as conn:
+=======
+        async with create_connection() as conn:
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
             result = await conn.send_raw({
                 "method": "__getitem__",
                 "args": ["test"],
@@ -171,8 +248,12 @@ class TestRPCOperations:
 
     async def test_invalid_method(self, server_factory, private_key):
         """存在しないメソッドはエラー"""
+<<<<<<< HEAD
         config = await server_factory()
         async with create_connection(config) as conn:
+=======
+        async with create_connection() as conn:
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
             await authenticate(conn, private_key)
             
             result = await conn.send_raw({
@@ -181,7 +262,12 @@ class TestRPCOperations:
                 "kwargs": {}
             })
             assert result.get("status") == "error"
+<<<<<<< HEAD
             assert result.get("error_type") in ("PermissionError", "AttributeError")
+=======
+            assert result.get("error_type") == "PermissionError"
+
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
 
 # =============================================================================
 # ブロッキング検証テスト
@@ -196,7 +282,11 @@ class TestBlocking:
         config = await server_factory()
         
         async def write_client(client_id: int):
+<<<<<<< HEAD
             async with create_connection(config) as conn:
+=======
+            async with create_connection() as conn:
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
                 await authenticate(conn, private_key)
                 
                 start = time.perf_counter()
@@ -216,10 +306,29 @@ class TestBlocking:
             return_exceptions=True
         )
         
+<<<<<<< HEAD
         for result in results:
             if isinstance(result, Exception):
                 pytest.fail(f"Concurrent write failed: {result}")
         
+=======
+        # エラーがないことを確認
+        # エラーがないことを確認
+        for result in results:
+            if isinstance(result, Exception):
+                # エラーの詳細（タイプとメッセージ）を表示してアサーション失敗させる
+                error_msg = f"{type(result).__name__}: {result}"
+                pytest.fail(f"Concurrent write failed: {error_msg}")
+        
+        # 各クライアントの処理時間
+        individual_times = [r[1] for r in results]
+        sum_individual = sum(individual_times)
+        
+        # 並列実行されていれば、合計時間は個別時間の合計より短いはず
+        print(f"Total: {total_elapsed:.3f}s, Sum of individual: {sum_individual:.3f}s")
+        
+        # 少なくとも全てのクライアントが完了していることを確認
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
         assert len(results) == 3
 
 # =============================================================================
@@ -235,17 +344,34 @@ class TestSecurity:
         config = await server_factory()
         challenges = []
         
+<<<<<<< HEAD
         async with create_connection(config) as conn:
             for _ in range(3):
                 challenge_msg = await conn.send_raw({"type": "AUTH_START", "username": "admin"})
+=======
+        async with create_connection() as conn:
+            for _ in range(3):
+                challenge_msg = await conn.send_raw("AUTH_START")
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
                 challenges.append(challenge_msg.get("data"))
         
         assert len(set(challenges)) == 3
 
     async def test_invalid_message_format(self, server_factory):
         """不正なメッセージフォーマットはエラー"""
+<<<<<<< HEAD
         config = await server_factory()
         async with create_connection(config) as conn:
+=======
+        async with create_connection() as conn:
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
             result = await conn.send_raw({"invalid": "format"})
             assert isinstance(result, dict)
             assert result.get("status") == "error" or "unauthorized" in str(result).lower()
+<<<<<<< HEAD
+=======
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v", "--tb=short"])
+>>>>>>> 8fab70075150ba75fbca55ecd3edb53f56c4aa53
