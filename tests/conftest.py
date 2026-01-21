@@ -46,8 +46,54 @@ def certs(tmp_path_factory):
     cert_path = tmp_path / "cert.pem"
     key_path = tmp_path / "key.pem"
 
-    # Mock cert generation if tools not available, but usually we have openssl
-    os.system(f"openssl req -newkey rsa:2048 -nodes -keyout {key_path} -x509 -days 1 -out {cert_path} -subj '/CN=localhost'")
+    # Generate self-signed certificate using cryptography library (cross-platform)
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import datetime
+
+    # Generate key
+    tls_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+    )
+    
+    # Generate certificate
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, u"localhost"),
+    ])
+    
+    cert = x509.CertificateBuilder().subject_name(
+        subject
+    ).issuer_name(
+        issuer
+    ).public_key(
+        tls_key.public_key()
+    ).serial_number(
+        x509.random_serial_number()
+    ).not_valid_before(
+        datetime.datetime.utcnow()
+    ).not_valid_after(
+        datetime.datetime.utcnow() + datetime.timedelta(days=1)
+    ).add_extension(
+        x509.SubjectAlternativeName([
+            x509.DNSName(u"localhost"),
+        ]),
+        critical=False,
+    ).sign(tls_key, hashes.SHA256())
+    
+    # Write key
+    with open(key_path, "wb") as f:
+        f.write(tls_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption()
+        ))
+    
+    # Write cert
+    with open(cert_path, "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
 
     return {
         "priv": str(priv_path),

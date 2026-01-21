@@ -14,8 +14,6 @@ from aioquic.quic.events import StreamDataReceived
 from cryptography.hazmat.primitives import serialization
 from nanasqlite_server import protocol
 
-import os
-
 # Use certs from conftest.py
 @pytest.fixture
 def private_key_path(certs):
@@ -35,7 +33,6 @@ class ClientProtocol(QuicConnectionProtocol):
         self._responses = asyncio.Queue()
 
     def quic_event_received(self, event):
-        from aioquic.quic.events import StreamDataReceived
         if isinstance(event, StreamDataReceived):
             message, _ = protocol.decode_message(event.data)
             self._responses.put_nowait(message)
@@ -212,14 +209,12 @@ class TestBlocking:
                 elapsed = time.perf_counter() - start
                 return client_id, elapsed
         
-        start_total = time.perf_counter()
         results = await asyncio.gather(
             write_client(1),
             write_client(2),
             write_client(3),
             return_exceptions=True
         )
-        total_elapsed = time.perf_counter() - start_total
         
         for result in results:
             if isinstance(result, Exception):

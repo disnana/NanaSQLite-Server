@@ -89,9 +89,9 @@ class AccountManager:
 # --- Global State ---
 
 _executor = ThreadPoolExecutor(max_workers=4)
-failed_attempts = {}
-ban_list = {}
-_db_instances = {}
+failed_attempts: dict[str, int] = {}
+ban_list: dict[str, float] = {}
+_db_instances: dict[str, NanaSQLite] = {}
 
 # Absolute No List (Methods that should NEVER be called via RPC)
 FORBIDDEN_METHODS = {
