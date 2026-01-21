@@ -81,10 +81,21 @@ class AccountManager:
             self._stop_event.clear()
             self._watcher_task = asyncio.create_task(self.watch())
 
-    def stop_watching(self):
+    async def stop_watching(self):
         """監視タスクを停止"""
         if self._watcher_task:
             self._stop_event.set()
+            try:
+                # 監視タスクの終了を待機
+                await asyncio.wait_for(self._watcher_task, timeout=2.0)
+            except Exception:
+                # タイムアウトした場合はキャンセル
+                self._watcher_task.cancel()
+                try:
+                    await self._watcher_task
+                except asyncio.CancelledError:
+                    # Ignore cancellation error during shutdown
+                    pass
             self._watcher_task = None
 
     def find_account_by_name(self, name):

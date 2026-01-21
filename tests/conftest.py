@@ -114,7 +114,11 @@ def ensure_test_server():
         # 優雅に終了を試みる
         if proc.poll() is None:
             try:
-                proc.send_signal(signal.SIGINT)
+                if sys.platform == "win32":
+                    proc.terminate()
+                else:
+                    proc.send_signal(signal.SIGINT)
+
                 try:
                     proc.wait(timeout=5)
                 except Exception:

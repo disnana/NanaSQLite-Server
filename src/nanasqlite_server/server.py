@@ -397,7 +397,7 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
         await asyncio.Future()
     finally:
         # 監視を停止
-        account_manager.stop_watching()
+        await account_manager.stop_watching()
 
         # サーバー終了時にエグゼキューターをシャットダウン
         if _executor is not None:
