@@ -14,7 +14,9 @@ def get_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         # Bind only to the loopback interface to avoid exposing on all interfaces
         s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        port = s.getsockname()[1]
+    return port
 
 @pytest.fixture(scope="session")
 def certs(tmp_path_factory):
@@ -72,9 +74,9 @@ def certs(tmp_path_factory):
     ).serial_number(
         x509.random_serial_number()
     ).not_valid_before(
-        datetime.datetime.utcnow()
+        datetime.datetime.now(datetime.UTC)
     ).not_valid_after(
-        datetime.datetime.utcnow() + datetime.timedelta(days=1)
+        datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
     ).add_extension(
         x509.SubjectAlternativeName([
             x509.DNSName(u"localhost"),
@@ -142,7 +144,8 @@ async def server_factory(certs, tmp_path):
             )
         ))
 
-        await asyncio.sleep(0.5)
+        # Wait longer for server to start, especially on Windows
+        await asyncio.sleep(1.0)
         servers.append(server_task)
         return config
 
