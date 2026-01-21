@@ -8,7 +8,6 @@ from collections import defaultdict
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived
-from cryptography.hazmat.primitives import serialization
 from nanasqlite import NanaSQLite
 from nanasqlite.exceptions import NanaSQLiteError
 from . import protocol
@@ -350,6 +349,7 @@ def main_sync():
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
+        # Intentional ignore of KeyboardInterrupt for graceful shutdown via main()
         logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")
 
 async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_config="accounts.json"):
@@ -395,4 +395,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main(port=args.port))
     except KeyboardInterrupt:
+        # Intentional ignore of KeyboardInterrupt to avoid crash log
         logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")
