@@ -239,12 +239,20 @@ class TestBlocking:
                 return client_id, elapsed
         
         start_total = time.perf_counter()
-        results = await asyncio.gather(
-            write_client(1),
-            write_client(2),
-            write_client(3),
-            return_exceptions=True
-        )
+        # pytestのハングを防ぐため、gather自体にもタイムアウトを設定
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    write_client(1),
+                    write_client(2),
+                    write_client(3),
+                    return_exceptions=True
+                ),
+                timeout=30.0 # 十分な時間
+            )
+        except asyncio.TimeoutError:
+            pytest.fail("test_concurrent_writes timed out (possible deadlock or server hang)")
+
         total_elapsed = time.perf_counter() - start_total
         
         # エラーがないことを確認

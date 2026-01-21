@@ -4,6 +4,7 @@ import json
 import pytest
 from aioquic.asyncio import connect
 from aioquic.quic.configuration import QuicConfiguration
+import ssl
 from nanasqlite_server.client import RemoteNanaSQLite
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization

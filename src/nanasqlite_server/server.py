@@ -34,9 +34,14 @@ ban_list: dict[str, float] = {}  # {ip: unban_time}
 _executor = None
 
 def get_executor():
+    """共有スレッドプールエグゼキューターを取得 (遅延初期化)"""
     global _executor
     if _executor is None:
-        _executor = ThreadPoolExecutor(max_workers=4)
+        # SQLiteのブロッキングを防ぐため、スレッド数を少し多めに確保
+        _executor = ThreadPoolExecutor(
+            max_workers=10,
+            thread_name_prefix="nanasqlite_worker"
+        )
     return _executor
 
 # 禁止メソッド一覧 (ブラックリスト)
@@ -333,13 +338,20 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             method = getattr(self.db, method_name)
 
             # 全てのDB操作をexecutorで実行 (OSを問わずイベントループをブロッキングから守る)
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                get_executor(),
-                functools.partial(method, *args, **kwargs)
-            )
-
-            return {"status": "success", "result": result}
+            loop = asyncio.get_running_loop()
+            try:
+                # DB操作にタイムアウトを設定 (デッドロックや長時間ロックの対策)
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        get_executor(),
+                        functools.partial(method, *args, **kwargs)
+                    ),
+                    timeout=15.0 # 十分に長いが無限ではない
+                )
+                return {"status": "success", "result": result}
+            except asyncio.TimeoutError:
+                logging.error(f"Database operation timeout: {method_name}")
+                raise RuntimeError("Database operation timed out")
         else:
             raise AttributeError(f"NanaSQLite object has no attribute '{method_name}'")
 
@@ -409,9 +421,9 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
             try:
                 # wait=False to prevent hanging if threads are stuck
                 _executor.shutdown(wait=False, cancel_futures=True)
-            except Exception:
-                # Ignore errors during executor shutdown
-                pass
+            except Exception as e:
+                # Intentional ignore of errors during shutdown to ensure main loop finishes
+                logging.debug(f"Error during executor shutdown: {e}")
             _executor = None
 
 if __name__ == "__main__":
