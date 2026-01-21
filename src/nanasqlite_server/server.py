@@ -369,7 +369,8 @@ def main_sync():
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
+        # Treat user-initiated cancellation as a normal shutdown without a traceback
+        logging.info("Server interrupted by user, shutting down.")
 
 async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_config="accounts.json"):
     global _executor
