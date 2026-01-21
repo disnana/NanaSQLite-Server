@@ -378,10 +378,10 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
     print("Auth mode: Ed25519 Passkey (Challenge-Response)")
     print("Security: All DB operations run in executor (non-blocking)")
 
-    try:
-        # アカウント情報の監視を開始
-        account_manager.start_watching()
+    # アカウント情報の監視を開始
+    account_manager.start_watching()
 
+    try:
         print(f"NanaSQLite Server ready and listening on {port}")
         await serve(
             "127.0.0.1",
@@ -395,7 +395,11 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
                 **kwargs
             ),
         )
-        await asyncio.Future()
+        # Use a more robust way to wait that allows for graceful cancellation
+        while True:
+            await asyncio.sleep(3600)
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        logging.info("Server shutting down...")
     finally:
         # 監視を停止
         await account_manager.stop_watching()
@@ -403,7 +407,8 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
         # サーバー終了時にエグゼキューターをシャットダウン
         if _executor is not None:
             try:
-                _executor.shutdown(wait=True, cancel_futures=True)
+                # wait=False to prevent hanging if threads are stuck
+                _executor.shutdown(wait=False, cancel_futures=True)
             except Exception:
                 # Ignore errors during executor shutdown
                 pass

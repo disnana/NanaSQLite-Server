@@ -178,17 +178,21 @@ async def test_anti_dos_stream_limit(dedicated_server):
     config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
 
     async with connect("127.0.0.1", port, configuration=config, create_protocol=NanaRpcClientProtocol) as conn:
-        for _ in range(100):
+        # Limit is 50. We send 60 to exceed it.
+        for _ in range(60):
             try:
                 stream_id = conn._quic.get_next_available_stream_id()
                 conn._quic.send_stream_data(stream_id, b"data", end_stream=False)
                 conn.transmit()
+                # Give server time to process resets
+                await asyncio.sleep(0.001)
             except Exception:
                 # Connection might be reset or closed by server due to limits
                 break
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.0)
         async with connect("127.0.0.1", port, configuration=config, create_protocol=NanaRpcClientProtocol) as conn2:
+            # New connection should still be possible
             await conn2.call_rpc("AUTH_START")
 
 @pytest.mark.asyncio
@@ -201,18 +205,25 @@ async def test_anti_dos_total_buffer_limit(dedicated_server):
         stream_id = conn._quic.get_next_available_stream_id()
         chunk = b"A" * (1024 * 1024) # 1MB
 
+        # Limit is 50MB. We send 60MB.
         for _ in range(60):
             try:
                 conn._quic.send_stream_data(stream_id, chunk, end_stream=False)
                 conn.transmit()
-                await asyncio.sleep(0.01)
+                # Server needs time to process large data and close connection
+                await asyncio.sleep(0.05)
             except Exception:
                 # Connection closed by server due to buffer limits
                 break
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.0)
         try:
+            # Original connection should be dead
             await conn.call_rpc("AUTH_START")
         except Exception:
             # Expected failure if connection is closed
             pass
+
+        # New connection should still be possible
+        async with connect("127.0.0.1", port, configuration=config, create_protocol=NanaRpcClientProtocol) as conn2:
+            await conn2.call_rpc("AUTH_START")
