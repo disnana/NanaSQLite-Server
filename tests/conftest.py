@@ -62,12 +62,14 @@ def ensure_test_server():
     env["NANASQLITE_DISABLE_BAN"] = "1"
     env["NANASQLITE_TEST_MODE"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
+    env["NANASQLITE_FORCE_POLLING"] = "1"
     
     # PYTHONPATHを明示的に設定 (カレントプロセスのsys.pathを使用)
     python_path = os.pathsep.join(sys.path)
     env["PYTHONPATH"] = python_path
     
-    cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port)]
+    db_path = f"server_db_{worker_id}.sqlite"
+    cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port), "--db", db_path]
 
     # パイプ詰まりによるハングアップを防ぐため、出力をファイルにリダイレクト
     log_file = open(f"server_log_{worker_id}.log", "w", encoding="utf-8")
@@ -89,7 +91,7 @@ def ensure_test_server():
         config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
         start_wait = time.time()
         
-        while time.time() - start_wait < 30.0:  # 最大30秒待機
+        while time.time() - start_wait < 60.0:  # 最大60秒待機 (CI環境向けに延長)
             if proc.poll() is not None:
                 return False  # プロセス終了
                 
@@ -98,7 +100,7 @@ def ensure_test_server():
                 async with connect("127.0.0.1", port, configuration=config):
                     return True
             except Exception:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.0)
         return False
 
     # 起動を待機

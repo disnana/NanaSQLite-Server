@@ -71,8 +71,10 @@ class AccountManager:
 
     async def watch(self):
         """ファイルを監視して自動更新するバックグラウンドタスク"""
+        # CI環境や特定の環境でwatchfilesが不安定な場合はポーリングを強制
+        force_polling = os.environ.get("NANASQLITE_FORCE_POLLING") == "1"
         try:
-            if not HAS_WATCHFILES:
+            if not HAS_WATCHFILES or force_polling:
                 # ポーリングによるフォールバック
                 while not self._stop_event.is_set():
                     try:

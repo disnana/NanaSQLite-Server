@@ -105,13 +105,14 @@ def record_failed_attempt(ip):
 
 
 # 共有DBインスタンス (bulk_load=True でメモリに全データをロード)
+_db_path = "server_db.sqlite"
 _shared_db = None
 
 def get_shared_db():
     """共有DBインスタンスを取得 (遅延初期化)"""
     global _shared_db
     if _shared_db is None:
-        _shared_db = NanaSQLite("server_db.sqlite", bulk_load=True)
+        _shared_db = NanaSQLite(_db_path, bulk_load=True)
     return _shared_db
 
 
@@ -208,7 +209,9 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 # Store task reference to prevent garbage collection in Python 3.13+
                 task = asyncio.create_task(self.handle_request(event.stream_id, data))
                 self._background_tasks.add(task)
+                _active_tasks.add(task) # Global reference
                 task.add_done_callback(self._background_tasks.discard)
+                task.add_done_callback(_active_tasks.discard)
 
     async def handle_request(self, stream_id, data):
         try:
@@ -367,15 +370,22 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
 def main_sync():
     """Entry point for console_scripts"""
+    parser = argparse.ArgumentParser(description="NanaSQLite QUIC Server")
+    parser.add_argument("--port", type=int, default=4433, help="Port to listen on")
+    parser.add_argument("--accounts", type=str, default="accounts.json", help="Path to accounts configuration file")
+    parser.add_argument("--db", type=str, default="server_db.sqlite", help="Path to SQLite database file")
+    args = parser.parse_args()
+
     # Python 3.13+ では、シグナルハンドラの登録タイミングが重要な場合があるため
     # asyncio.run() に全て任せる
     try:
-        asyncio.run(main())
+        asyncio.run(main(port=args.port, account_config=args.accounts, db_path=args.db))
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
 
-async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_config="accounts.json"):
-    global _executor, _server
+async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_config="accounts.json", db_path="server_db.sqlite"):
+    global _executor, _server, _db_path
+    _db_path = db_path
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -464,11 +474,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="NanaSQLite QUIC Server")
     parser.add_argument("--port", type=int, default=4433, help="Port to listen on")
     parser.add_argument("--accounts", type=str, default="accounts.json", help="Path to accounts configuration file")
+    parser.add_argument("--db", type=str, default="server_db.sqlite", help="Path to SQLite database file")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
     try:
-        asyncio.run(main(port=args.port, account_config=args.accounts))
-    except KeyboardInterrupt:
+        asyncio.run(main(port=args.port, account_config=args.accounts, db_path=args.db))
+    except (KeyboardInterrupt, asyncio.CancelledError):
         # Intentional ignore of KeyboardInterrupt to avoid crash log
         logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")

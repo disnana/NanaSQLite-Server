@@ -56,10 +56,13 @@ async def dedicated_server(tmp_path):
         env = os.environ.copy()
         env["PYTHONPATH"] = orig_cwd + os.pathsep + os.path.join(orig_cwd, "src")
         env["PYTHONUNBUFFERED"] = "1"
+        env["NANASQLITE_FORCE_POLLING"] = "1"
 
+        db_path = tmp_path / "dedicated_server_db.sqlite"
         cmd = [sys.executable, "-m", "nanasqlite_server.server",
                "--port", str(port),
-               "--accounts", str(config_path)]
+               "--accounts", str(config_path),
+               "--db", str(db_path)]
 
         # パイプ詰まりによるハングアップを防ぐため
         log_file_path = tmp_path / "dedicated_server.log"
@@ -74,7 +77,7 @@ async def dedicated_server(tmp_path):
         async def wait_for_quic():
             config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
             start_wait = time.time()
-            while time.time() - start_wait < 30.0:  # タイムアウトを延長
+            while time.time() - start_wait < 60.0:  # タイムアウトを延長
                 if proc.poll() is not None:
                     return False
                 try:
@@ -82,7 +85,7 @@ async def dedicated_server(tmp_path):
                         return True
                 except Exception:
                     # Ignore connection errors during wait
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(1.0)
             return False
 
         if not await wait_for_quic():
