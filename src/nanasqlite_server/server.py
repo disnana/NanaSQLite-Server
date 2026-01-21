@@ -382,6 +382,7 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
         # アカウント情報の監視を開始
         account_manager.start_watching()
 
+        print(f"NanaSQLite Server ready and listening on {port}")
         await serve(
             "127.0.0.1",
             port,
@@ -401,7 +402,11 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
 
         # サーバー終了時にエグゼキューターをシャットダウン
         if _executor is not None:
-            _executor.shutdown(wait=True)
+            try:
+                _executor.shutdown(wait=True, cancel_futures=True)
+            except Exception:
+                # Ignore errors during executor shutdown
+                pass
             _executor = None
 
 if __name__ == "__main__":

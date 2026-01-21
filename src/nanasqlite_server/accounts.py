@@ -3,7 +3,14 @@ import os
 import logging
 import asyncio
 from cryptography.hazmat.primitives import serialization
-from watchfiles import awatch
+
+# watchfiles が環境にない場合のフォールバック（CI安定性のため）
+try:
+    from watchfiles import awatch
+    HAS_WATCHFILES = True
+except ImportError:
+    HAS_WATCHFILES = False
+    logging.warning("watchfiles not found, falling back to polling.")
 
 class Account:
     def __init__(self, name, public_key_pem, allowed_methods=None, forbidden_methods=None):
@@ -28,6 +35,8 @@ class AccountManager:
         self.default_public_key = default_public_key
         self._watcher_task = None
         self._stop_event = asyncio.Event()
+        self._load_throttle_interval = 1.0
+        self._last_checked = 0
 
         # 初回読み込み
         self._do_load()
@@ -62,18 +71,33 @@ class AccountManager:
 
     async def watch(self):
         """ファイルを監視して自動更新するバックグラウンドタスク"""
-        logging.info(f"Starting file watcher for {self.config_path}")
+        if not HAS_WATCHFILES:
+            # ポーリングによるフォールバック
+            while not self._stop_event.is_set():
+                await asyncio.sleep(self._load_throttle_interval)
+                self._do_load()
+            return
 
-        # ディレクトリを監視 (ファイル自体だと削除・再作成に弱いため)
+        logging.info(f"Starting file watcher for {self.config_path}")
         dir_to_watch = os.path.dirname(self.config_path)
         if not dir_to_watch:
             dir_to_watch = "."
 
-        async for changes in awatch(dir_to_watch, stop_event=self._stop_event):
-            for change_type, file_path in changes:
-                if os.path.abspath(file_path) == self.config_path:
-                    logging.info(f"Account config changed detected: {file_path}")
-                    self._do_load()
+        try:
+            async for changes in awatch(dir_to_watch, stop_event=self._stop_event):
+                for change_type, file_path in changes:
+                    if os.path.abspath(file_path) == self.config_path:
+                        logging.info(f"Account config change detected: {file_path}")
+                        self._do_load()
+        except asyncio.CancelledError:
+            # Task was cancelled, exit gracefully
+            raise
+        except Exception as e:
+            logging.error(f"Error in file watcher: {e}")
+            # エラー発生時はポーリングに切り替え
+            while not self._stop_event.is_set():
+                await asyncio.sleep(5.0)
+                self._do_load()
 
     def start_watching(self):
         """監視タスクを開始"""
@@ -85,17 +109,16 @@ class AccountManager:
         """監視タスクを停止"""
         if self._watcher_task:
             self._stop_event.set()
+            self._watcher_task.cancel()
             try:
                 # 監視タスクの終了を待機
                 await asyncio.wait_for(self._watcher_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                # Ignore cancellation and timeout during shutdown
+                pass
             except Exception:
-                # タイムアウトした場合はキャンセル
-                self._watcher_task.cancel()
-                try:
-                    await self._watcher_task
-                except asyncio.CancelledError:
-                    # Ignore cancellation error during shutdown
-                    pass
+                # Catch-all for unexpected errors during shutdown
+                pass
             self._watcher_task = None
 
     def find_account_by_name(self, name):
@@ -115,7 +138,7 @@ class AccountManager:
                     account.public_key.verify(signature, challenge)
                     return account
                 except Exception:
-                    # Invalid signature for this account hint, but we allow fall-through to linear search
+                    # Invalid signature for this hint, fall back to linear search
                     pass
 
         # 線形探索 (後方互換性)
@@ -126,6 +149,6 @@ class AccountManager:
                 account.public_key.verify(signature, challenge)
                 return account
             except Exception:
-                # Signature verification failed for this account, try next one
+                # Signature mismatch, continue to next account
                 continue
         return None

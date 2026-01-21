@@ -65,13 +65,14 @@ async def dedicated_server(tmp_path):
         async def wait_for_quic():
             config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
             start_wait = time.time()
-            while time.time() - start_wait < 10.0:
+            while time.time() - start_wait < 15.0:  # タイムアウトを延長
                 if proc.poll() is not None:
                     return False
                 try:
                     async with connect("127.0.0.1", port, configuration=config) as _:
                         return True
                 except Exception:
+                    # Ignore connection errors during wait
                     await asyncio.sleep(0.5)
             return False
 
@@ -90,6 +91,7 @@ async def dedicated_server(tmp_path):
             try:
                 proc.wait(timeout=5)
             except Exception:
+                # Force kill if termination fails
                 proc.kill()
         os.chdir(orig_cwd)
 
@@ -111,7 +113,8 @@ async def test_rbac_permissions(test_keys, dedicated_server):
             ]
         }, f)
 
-    await asyncio.sleep(0.5)
+    # 監視が反映されるまでCI環境では長めに待機
+    await asyncio.sleep(2.0)
 
     client = RemoteNanaSQLite(host="127.0.0.1", port=port, verify_ssl=False)
     client.private_key = priv
@@ -145,7 +148,8 @@ async def test_realtime_policy_update(test_keys, dedicated_server):
     with open(config_path, "w") as f:
         json.dump(accounts, f)
 
-    await asyncio.sleep(0.5)
+    # 反映待ち
+    await asyncio.sleep(2.0)
 
     client = RemoteNanaSQLite(host="127.0.0.1", port=port, verify_ssl=False)
     client.private_key = priv
@@ -158,7 +162,8 @@ async def test_realtime_policy_update(test_keys, dedicated_server):
         with open(config_path, "w") as f:
             json.dump(accounts, f)
 
-        await asyncio.sleep(0.5)
+        # watchfiles の検知待ち (CI環境では長めに)
+        await asyncio.sleep(2.0)
 
         with pytest.raises(PermissionError):
             await client.list_tables()
