@@ -60,6 +60,7 @@ def ensure_test_server():
     # サーバープロセスを起動
     env = os.environ.copy()
     env["NANASQLITE_DISABLE_BAN"] = "1"
+    env["NANASQLITE_TEST_MODE"] = "1"
     
     # PYTHONPATHを明示的に設定 (カレントプロセスのsys.pathを使用)
     python_path = os.pathsep.join(sys.path)
@@ -93,21 +94,19 @@ def ensure_test_server():
                 await asyncio.sleep(1.0)
         return False
 
-    # イベントループを持ってきて実行
+    # 起動を待機
     import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
     try:
-        if not loop.run_until_complete(wait_for_server()):
+        if not asyncio.run(wait_for_server()):
             if proc.poll() is not None:
                 stdout, stderr = proc.communicate()
                 raise RuntimeError(f"Test server process died. Code: {proc.returncode}\nStderr: {stderr}")
             else:
                 proc.kill()
                 raise RuntimeError("Timed out waiting for server to start accepting connections.")
-    finally:
-        loop.close()
+    except Exception as e:
+        proc.kill()
+        raise e
 
     try:
         yield

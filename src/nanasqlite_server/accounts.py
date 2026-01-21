@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import logging
 from cryptography.hazmat.primitives import serialization
 
@@ -23,18 +24,28 @@ class AccountManager:
         self.accounts = []
         self.last_loaded = 0
         self.default_public_key = default_public_key
+        self._load_throttle_interval = 1.0  # I/O負荷軽減のため、最低1秒は再チェックを控える
+        self._last_checked = 0
         self.load_accounts()
 
-    def load_accounts(self):
+    def load_accounts(self, force=False):
+        now = time.time()
+        # テスト環境など、即時性が極めて重要な場合は _load_throttle_interval を 0 に設定可能
+        if not force and now - self._last_checked < self._load_throttle_interval:
+            return
+        self._last_checked = now
+
         if not os.path.exists(self.config_path):
             if self.default_public_key:
                 # 従来の動作との互換性のため、デフォルトの公開鍵でadminアカウントを自動作成
                 self.accounts = [Account("default_admin", self.default_public_key)]
+            else:
+                self.accounts = []
             return
 
         try:
             mtime = os.path.getmtime(self.config_path)
-            if mtime <= self.last_loaded:
+            if not force and mtime <= self.last_loaded:
                 return
 
             with open(self.config_path, "r") as f:
@@ -55,10 +66,29 @@ class AccountManager:
         except Exception as e:
             logging.error(f"Error loading accounts: {e}")
 
-    def find_account_by_signature(self, signature, challenge):
+    def find_account_by_name(self, name):
+        """名前でアカウントを検索する (キャッシュを使用)"""
+        self.load_accounts()
+        for account in self.accounts:
+            if account.name == name:
+                return account
+        return None
+
+    def find_account_by_signature(self, signature, challenge, account_name_hint=None):
         """署名を検証して、対応するアカウントを返す"""
         # リクエストごとに再読み込みをチェック (即時反映のため)
         self.load_accounts()
+
+        # アカウント名のヒントがある場合は、まずそのアカウントを検証 (CPU負荷軽減)
+        if account_name_hint:
+            account = self.find_account_by_name(account_name_hint)
+            if account and account.public_key:
+                try:
+                    account.public_key.verify(signature, challenge)
+                    return account
+                except Exception:
+                    # ヒントが間違っていた場合は通常の線形探索へ進む（後方互換性のため）
+                    pass
 
         for account in self.accounts:
             if not account.public_key:

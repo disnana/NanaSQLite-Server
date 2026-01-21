@@ -104,7 +104,7 @@ class RemoteNanaSQLite(Base):
             print(f"{Fore.RED}Error loading private key: {e}{Style.RESET_ALL}")
             self.private_key = None
 
-    async def connect(self):
+    async def connect(self, account_name=None):
         """サーバーに接続し、Ed25519署名による認証を行う"""
         print(f"{Fore.CYAN}Connecting to {self.host}:{self.port}...{Style.RESET_ALL}")
         self._ctx = connect(
@@ -128,8 +128,12 @@ class RemoteNanaSQLite(Base):
         # 2. 署名の生成
         signature = self.private_key.sign(challenge_data)
         
-        # 3. 署名の送付
-        result = await self.connection.call_rpc({"type": "response", "data": signature})
+        # 3. 署名の送付 (アカウント名ヒントがあれば含める)
+        auth_response = {"type": "response", "data": signature}
+        if account_name:
+            auth_response["account"] = account_name
+
+        result = await self.connection.call_rpc(auth_response)
         
         if result == "AUTH_OK":
             print(f"{Fore.GREEN}Authentication successful!{Style.RESET_ALL}")

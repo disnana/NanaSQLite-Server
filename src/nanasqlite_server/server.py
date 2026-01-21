@@ -30,8 +30,14 @@ MAX_CONCURRENT_STREAMS = 50                 # 1接続あたりの最大同時ス
 failed_attempts: dict[str, int] = {}  # {ip: count} (defaultdictから変更してサイズ管理を容易に)
 ban_list: dict[str, float] = {}  # {ip: unban_time}
 
-# スレッドプールエグゼキューター (書き込み用)
-_executor = ThreadPoolExecutor(max_workers=4)
+# スレッドプールエグゼキューター (書き込み用) - プロセス終了時に適切に片付けられるように
+_executor = None
+
+def get_executor():
+    global _executor
+    if _executor is None:
+        _executor = ThreadPoolExecutor(max_workers=4)
+    return _executor
 
 # 禁止メソッド一覧 (ブラックリスト)
 # NanaSQLiteの更新に自動対応しつつ、危険なメソッドを制限する
@@ -221,9 +227,10 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                         return
 
                     signature = message.get("data")
+                    account_name_hint = message.get("account")
 
-                    # AccountManagerを使用してアカウントを検索
-                    account = self.account_manager.find_account_by_signature(signature, self.challenge)
+                    # AccountManagerを使用してアカウントを検索 (ヒントがあれば活用)
+                    account = self.account_manager.find_account_by_signature(signature, self.challenge, account_name_hint)
 
                     if account:
                         self.authenticated = True
@@ -285,11 +292,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         args = message.get("args", [])
         kwargs = message.get("kwargs", {})
 
-        # アカウントごとの権限設定を取得
-        allowed_methods = self.account.allowed_methods if self.account else self.default_allowed_methods
-        forbidden_methods = self.account.forbidden_methods if self.account else self.default_forbidden_methods
-
-        # 動的な権限剥奪の反映: 実行ごとにAccountManagerから最新のアカウント情報を取得
+        # 動的な権限剥奪の反映: 実行ごとにAccountManagerから最新のアカウント情報を取得 (1秒間隔でスロットル)
         self.account_manager.load_accounts()
         current_account = next((a for a in self.account_manager.accounts if a.name == self.account.name), None)
         if not current_account:
@@ -333,7 +336,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             # 全てのDB操作をexecutorで実行 (OSを問わずイベントループをブロッキングから守る)
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
-                _executor,
+                get_executor(),
                 functools.partial(method, *args, **kwargs)
             )
 
@@ -355,6 +358,7 @@ def main_sync():
         logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")
 
 async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_config="accounts.json"):
+    global _executor
     configuration = QuicConfiguration(is_client=False)
     configuration.load_cert_chain("cert.pem", "key.pem")
 
@@ -370,23 +374,33 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
     # AccountManagerの初期化
     account_manager = AccountManager(account_config, default_public_key)
 
+    # テスト環境用の調整
+    if os.environ.get("NANASQLITE_TEST_MODE"):
+        account_manager._load_throttle_interval = 0
+
     print(f"NanaSQLite QUIC Server starting on 127.0.0.1:{port}")
     print("Auth mode: Ed25519 Passkey (Challenge-Response)")
     print("Security: All DB operations run in executor (non-blocking)")
 
-    await serve(
-        "127.0.0.1",
-        port,
-        configuration=configuration,
-        create_protocol=lambda *args, **kwargs: NanaRpcProtocol(
-            account_manager,
-            allowed_methods,
-            forbidden_methods,
-            *args,
-            **kwargs
-        ),
-    )
-    await asyncio.Future()
+    try:
+        await serve(
+            "127.0.0.1",
+            port,
+            configuration=configuration,
+            create_protocol=lambda *args, **kwargs: NanaRpcProtocol(
+                account_manager,
+                allowed_methods,
+                forbidden_methods,
+                *args,
+                **kwargs
+            ),
+        )
+        await asyncio.Future()
+    finally:
+        # サーバー終了時にエグゼキューターをシャットダウン
+        if _executor is not None:
+            _executor.shutdown(wait=True)
+            _executor = None
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="NanaSQLite QUIC Server")
