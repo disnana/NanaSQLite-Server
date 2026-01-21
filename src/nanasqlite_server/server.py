@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives import serialization
 from nanasqlite import NanaSQLite
 from nanasqlite.exceptions import NanaSQLiteError
 from . import protocol
+from .accounts import AccountManager
 import argparse
 import os
 
@@ -20,6 +21,11 @@ PUBLIC_KEY_PATH = "nana_public.pub"
 MAX_FAILED_ATTEMPTS = 3
 BAN_DURATION = 900  # 15分 (秒)
 MAX_BAN_LIST_SIZE = 10000 # メモリ枯渇攻撃対策
+
+# DoS対策設定
+MAX_STREAM_BUFFER_SIZE = 10 * 1024 * 1024  # 10MB (単一ストリーム)
+MAX_TOTAL_BUFFER_SIZE = 50 * 1024 * 1024   # 50MB (1接続あたり合計)
+MAX_CONCURRENT_STREAMS = 50                 # 1接続あたりの最大同時ストリーム数
 
 # BAN・失敗回数管理
 failed_attempts: dict[str, int] = {}  # {ip: count} (defaultdictから変更してサイズ管理を容易に)
@@ -95,16 +101,19 @@ def get_shared_db():
 
 
 class NanaRpcProtocol(QuicConnectionProtocol):
-    def __init__(self, public_key, allowed_methods=None, forbidden_methods=None, *args, **kwargs):
+    def __init__(self, account_manager, allowed_methods=None, forbidden_methods=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.db = None
         self.authenticated = False
+        self.account = None
         self.challenge = None
         self.client_ip = None
         self.stream_buffers = defaultdict(bytearray)
-        self.public_key = public_key
-        self.allowed_methods = allowed_methods
-        self.forbidden_methods = forbidden_methods
+        self.total_buffer_size = 0
+        self.account_manager = account_manager
+        # グローバルなデフォルト制限 (アカウント個別の設定がない場合に使用)
+        self.default_allowed_methods = allowed_methods
+        self.default_forbidden_methods = forbidden_methods
         # Store task references to prevent premature GC in Python 3.13+
         self._background_tasks = set()
 
@@ -151,18 +160,36 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             return
 
         if isinstance(event, StreamDataReceived):
-            # ストリームデータをバッファリング (フラグメンテーション対策)
-            self.stream_buffers[event.stream_id].extend(event.data)
+            # 同時ストリーム数制限 (未認証時は厳格に適用)
+            if not self.authenticated and len(self.stream_buffers) >= MAX_CONCURRENT_STREAMS:
+                print(f"Too many concurrent streams for unauthenticated connection: {self.client_ip}")
+                self._quic.reset_stream(event.stream_id, 0)
+                return
 
-            # 最大バッファサイズ制限 (10MB) - リソース枯渇攻撃対策
-            if len(self.stream_buffers[event.stream_id]) > 10 * 1024 * 1024:
-                print(f"Buffer overflow for stream {event.stream_id}")
+            # 合計バッファサイズ制限
+            new_data_len = len(event.data)
+            if self.total_buffer_size + new_data_len > MAX_TOTAL_BUFFER_SIZE:
+                print(f"Total buffer overflow for connection from: {self.client_ip}")
+                self.close()
+                return
+
+            # ストリーム個別のサイズ制限
+            if len(self.stream_buffers[event.stream_id]) + new_data_len > MAX_STREAM_BUFFER_SIZE:
+                print(f"Stream buffer overflow for stream {event.stream_id}")
+                # このストリームの分を合計から引く
+                self.total_buffer_size -= len(self.stream_buffers[event.stream_id])
                 self.stream_buffers.pop(event.stream_id)
                 self._quic.reset_stream(event.stream_id, 0)
                 return
 
+            # バッファリング
+            self.stream_buffers[event.stream_id].extend(event.data)
+            self.total_buffer_size += new_data_len
+
             if event.end_stream:
                 data = bytes(self.stream_buffers.pop(event.stream_id))
+                self.total_buffer_size -= len(data)
+
                 # Store task reference to prevent garbage collection in Python 3.13+
                 task = asyncio.create_task(self.handle_request(event.stream_id, data))
                 self._background_tasks.add(task)
@@ -170,8 +197,10 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
     async def handle_request(self, stream_id, data):
         try:
-            if not self.public_key:
-                raise RuntimeError("Server public key not loaded")
+            # 即時反映のため、リクエストごとにBAN状態を再チェック
+            if is_banned(self.client_ip):
+                self.close()
+                return
 
             message, _ = protocol.decode_message(data)
             if message is None:
@@ -193,15 +222,19 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                         return
 
                     signature = message.get("data")
-                    try:
-                        self.public_key.verify(signature, self.challenge)
+
+                    # AccountManagerを使用してアカウントを検索
+                    account = self.account_manager.find_account_by_signature(signature, self.challenge)
+
+                    if account:
                         self.authenticated = True
+                        self.account = account
                         self.db = get_shared_db()  # 共有DBを使用
                         if self.client_ip in failed_attempts:
                             del failed_attempts[self.client_ip]
                         response = "AUTH_OK"
-                        print(f"Authentication successful for {self.client_ip}")
-                    except Exception:
+                        print(f"Authentication successful for {self.client_ip} (Account: {account.name})")
+                    else:
                         is_now_banned = record_failed_attempt(self.client_ip)
                         print(f"Auth failed for {self.client_ip}. Attempt: {failed_attempts.get(self.client_ip, 0)}")
 
@@ -253,18 +286,32 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         args = message.get("args", [])
         kwargs = message.get("kwargs", {})
 
+        # アカウントごとの権限設定を取得
+        allowed_methods = self.account.allowed_methods if self.account else self.default_allowed_methods
+        forbidden_methods = self.account.forbidden_methods if self.account else self.default_forbidden_methods
+
+        # 動的な権限剥奪の反映: 実行ごとにAccountManagerから最新のアカウント情報を取得
+        self.account_manager.load_accounts()
+        current_account = next((a for a in self.account_manager.accounts if a.name == self.account.name), None)
+        if not current_account:
+            raise PermissionError(f"Account '{self.account.name}' has been disabled")
+
+        # 権限情報を最新に更新
+        allowed_methods = current_account.allowed_methods
+        forbidden_methods = current_account.forbidden_methods
+
         # 動的保護:
         # 1. カスタム許可リストがあれば優先的にチェック
         # 2. カスタム禁止リストがあればチェック
         # 3. デフォルトの動的保護メカニズム
 
         # 優先順位 1: カスタム許可リスト (明示的に許可されている場合は他をスキップ)
-        if self.allowed_methods and method_name in self.allowed_methods:
+        if allowed_methods and method_name in allowed_methods:
             pass
         else:
             # 優先順位 2: カスタム禁止リスト (明示的に禁止されている場合は拒否)
-            if self.forbidden_methods and method_name in self.forbidden_methods:
-                raise PermissionError(f"Method '{method_name}' is forbidden by custom policy")
+            if forbidden_methods and method_name in forbidden_methods:
+                raise PermissionError(f"Method '{method_name}' is forbidden for account '{current_account.name}'")
 
             # 優先順位 3: デフォルトの安全制限
             is_special = method_name.startswith("__") and method_name.endswith("__")
@@ -305,17 +352,21 @@ def main_sync():
     except KeyboardInterrupt:
         logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")
 
-async def main(allowed_methods=None, forbidden_methods=None, port=4433):
+async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_config="accounts.json"):
     configuration = QuicConfiguration(is_client=False)
     configuration.load_cert_chain("cert.pem", "key.pem")
 
-    # 公開鍵を事前にロード
+    # 公開鍵を事前にロード (互換性のためのデフォルト)
+    default_public_key = None
     try:
-        with open(PUBLIC_KEY_PATH, "rb") as f:
-            public_key = serialization.load_ssh_public_key(f.read())
-    except Exception as e:
-        print(f"CRITICAL: Failed to load public key from {PUBLIC_KEY_PATH}: {e}")
-        return
+        if os.path.exists(PUBLIC_KEY_PATH):
+            with open(PUBLIC_KEY_PATH, "rb") as f:
+                default_public_key = f.read().decode()
+    except Exception:
+        pass
+
+    # AccountManagerの初期化
+    account_manager = AccountManager(account_config, default_public_key)
 
     print(f"NanaSQLite QUIC Server starting on 127.0.0.1:{port}")
     print("Auth mode: Ed25519 Passkey (Challenge-Response)")
@@ -326,7 +377,7 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433):
         port,
         configuration=configuration,
         create_protocol=lambda *args, **kwargs: NanaRpcProtocol(
-            public_key,
+            account_manager,
             allowed_methods,
             forbidden_methods,
             *args,
