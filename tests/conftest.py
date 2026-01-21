@@ -52,7 +52,8 @@ def ensure_test_server():
     except ValueError:
         worker_num = 0
     
-    port = 4433 + worker_num
+    # 他のプロセスやテストと衝突しないようにポート範囲をずらす
+    port = 4433 + (worker_num * 10)
     
     # テストコード側にポート番号を伝える環境変数を設定
     os.environ["NANASQLITE_TEST_PORT"] = str(port)

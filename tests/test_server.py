@@ -74,10 +74,11 @@ async def create_connection():
             async with connect(HOST, PORT, configuration=configuration, create_protocol=ClientProtocol) as client:
                 yield client
             return
-        except (ConnectionError, OSError) as e:
+        except (ConnectionError, OSError, asyncio.TimeoutError) as e:
             last_err = e
             # 最後の試行でなければ少し待って再試行
             if i < max_retries - 1:
+                print(f"[DEBUG] Connection attempt {i+1} failed ({type(e).__name__}): {e}. Retrying...")
                 await asyncio.sleep(2.0)
                 continue
     

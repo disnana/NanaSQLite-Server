@@ -390,10 +390,19 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
-    # シグナルハンドラの設定 (Windows以外)
+    # シグナルハンドラの設定
     if sys.platform != "win32":
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, lambda: stop_event.set())
+    else:
+        # Windows では signal.signal を使用 (スレッドセーフに Event をセット)
+        def handle_signal(sig, frame):
+            loop.call_soon_threadsafe(stop_event.set)
+
+        signal.signal(signal.SIGINT, handle_signal)
+        signal.signal(signal.SIGTERM, handle_signal)
+        if hasattr(signal, "SIGBREAK"):
+            signal.signal(signal.SIGBREAK, handle_signal)
 
     configuration = QuicConfiguration(is_client=False)
     configuration.load_cert_chain("cert.pem", "key.pem")
