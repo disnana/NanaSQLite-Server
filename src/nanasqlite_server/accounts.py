@@ -71,33 +71,41 @@ class AccountManager:
 
     async def watch(self):
         """ファイルを監視して自動更新するバックグラウンドタスク"""
-        if not HAS_WATCHFILES:
-            # ポーリングによるフォールバック
-            while not self._stop_event.is_set():
-                await asyncio.sleep(self._load_throttle_interval)
-                self._do_load()
-            return
-
-        logging.info(f"Starting file watcher for {self.config_path}")
-        dir_to_watch = os.path.dirname(self.config_path)
-        if not dir_to_watch:
-            dir_to_watch = "."
-
         try:
-            async for changes in awatch(dir_to_watch, stop_event=self._stop_event):
-                for change_type, file_path in changes:
-                    if os.path.abspath(file_path) == self.config_path:
-                        logging.info(f"Account config change detected: {file_path}")
+            if not HAS_WATCHFILES:
+                # ポーリングによるフォールバック
+                while not self._stop_event.is_set():
+                    try:
+                        await asyncio.sleep(self._load_throttle_interval)
                         self._do_load()
-        except asyncio.CancelledError:
-            # Task was cancelled, exit gracefully
-            raise
-        except Exception as e:
-            logging.error(f"Error in file watcher: {e}")
-            # エラー発生時はポーリングに切り替え
-            while not self._stop_event.is_set():
-                await asyncio.sleep(5.0)
-                self._do_load()
+                    except asyncio.CancelledError:
+                        break
+                return
+
+            logging.info(f"Starting file watcher for {self.config_path}")
+            dir_to_watch = os.path.dirname(self.config_path)
+            if not dir_to_watch:
+                dir_to_watch = "."
+
+            try:
+                async for changes in awatch(dir_to_watch, stop_event=self._stop_event):
+                    for _, file_path in changes:
+                        if os.path.abspath(file_path) == self.config_path:
+                            logging.info(f"Account config change detected: {file_path}")
+                            self._do_load()
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logging.error(f"Error in file watcher: {e}")
+                # エラー発生時はポーリングに切り替え
+                while not self._stop_event.is_set():
+                    try:
+                        await asyncio.sleep(5.0)
+                        self._do_load()
+                    except asyncio.CancelledError:
+                        break
+        finally:
+            logging.info("File watcher task stopped")
 
     def start_watching(self):
         """監視タスクを開始"""
@@ -109,16 +117,17 @@ class AccountManager:
         """監視タスクを停止"""
         if self._watcher_task:
             self._stop_event.set()
-            self._watcher_task.cancel()
+            # 監視タスクの終了を待機。タスク内で CancelledError は処理済み
             try:
-                # 監視タスクの終了を待機
-                await asyncio.wait_for(self._watcher_task, timeout=2.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                # Ignore cancellation and timeout during shutdown
-                pass
-            except Exception:
-                # Catch-all for unexpected errors during shutdown
-                pass
+                # まずは待ってみる
+                await asyncio.wait_for(asyncio.shield(self._watcher_task), timeout=1.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                # 終わらなければキャンセル
+                self._watcher_task.cancel()
+                try:
+                    await asyncio.wait_for(self._watcher_task, timeout=1.0)
+                except Exception:
+                    pass
             self._watcher_task = None
 
     def find_account_by_name(self, name):

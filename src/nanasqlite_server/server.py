@@ -3,6 +3,8 @@ import logging
 import secrets
 import time
 import functools
+import signal
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from aioquic.asyncio import QuicConnectionProtocol, serve
@@ -362,14 +364,24 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
 def main_sync():
     """Entry point for console_scripts"""
+    # Python 3.13+ では、シグナルハンドラの登録タイミングが重要な場合があるため
+    # asyncio.run() に全て任せる
     try:
         asyncio.run(main())
-    except KeyboardInterrupt:
-        # Intentional ignore of KeyboardInterrupt for graceful shutdown via main()
-        logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
 
 async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_config="accounts.json"):
     global _executor
+
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    # シグナルハンドラの設定 (Windows以外)
+    if sys.platform != "win32":
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, lambda: stop_event.set())
+
     configuration = QuicConfiguration(is_client=False)
     configuration.load_cert_chain("cert.pem", "key.pem")
 
@@ -393,9 +405,10 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
     # アカウント情報の監視を開始
     account_manager.start_watching()
 
+    server = None
     try:
         print(f"NanaSQLite Server ready and listening on {port}")
-        await serve(
+        server = await serve(
             "127.0.0.1",
             port,
             configuration=configuration,
@@ -407,12 +420,22 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
                 **kwargs
             ),
         )
-        # Use a more robust way to wait that allows for graceful cancellation
-        while True:
-            await asyncio.sleep(3600)
-    except (asyncio.CancelledError, KeyboardInterrupt):
-        logging.info("Server shutting down...")
+
+        # stop_event がセットされるまで待機
+        try:
+            await stop_event.wait()
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            pass
+
+    except Exception as e:
+        logging.error(f"Error starting server: {e}")
     finally:
+        logging.info("Server shutting down...")
+
+        # サーバーを停止
+        if server is not None:
+            server.close()
+
         # 監視を停止
         await account_manager.stop_watching()
 
@@ -422,9 +445,13 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
                 # wait=False to prevent hanging if threads are stuck
                 _executor.shutdown(wait=False, cancel_futures=True)
             except Exception as e:
-                # Intentional ignore of errors during shutdown to ensure main loop finishes
+                # Intentional ignore of errors during shutdown
                 logging.debug(f"Error during executor shutdown: {e}")
             _executor = None
+
+        # stdout/stderr をフラッシュ
+        sys.stdout.flush()
+        sys.stderr.flush()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="NanaSQLite QUIC Server")

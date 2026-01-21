@@ -55,21 +55,26 @@ async def dedicated_server(tmp_path):
 
         env = os.environ.copy()
         env["PYTHONPATH"] = orig_cwd + os.pathsep + os.path.join(orig_cwd, "src")
+        env["PYTHONUNBUFFERED"] = "1"
 
         cmd = [sys.executable, "-m", "nanasqlite_server.server",
                "--port", str(port),
                "--accounts", str(config_path)]
 
-        proc = subprocess.Popen(cmd, env=env)
+        kwargs = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+        proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs)
 
         async def wait_for_quic():
             config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
             start_wait = time.time()
-            while time.time() - start_wait < 15.0:  # タイムアウトを延長
+            while time.time() - start_wait < 30.0:  # タイムアウトを延長
                 if proc.poll() is not None:
                     return False
                 try:
-                    async with connect("127.0.0.1", port, configuration=config) as _:
+                    async with connect("127.0.0.1", port, configuration=config):
                         return True
                 except Exception:
                     # Ignore connection errors during wait
@@ -77,22 +82,30 @@ async def dedicated_server(tmp_path):
             return False
 
         if not await wait_for_quic():
-            proc.kill()
-            raise RuntimeError("Dedicated server failed to start (QUIC check failed)")
+            if proc.poll() is not None:
+                stdout, stderr = proc.communicate()
+                raise RuntimeError(f"Dedicated server process died. Code: {proc.returncode}\nStdout: {stdout}\nStderr: {stderr}")
+            else:
+                proc.kill()
+                raise RuntimeError("Dedicated server failed to start (QUIC check failed)")
 
         yield port, config_path, priv_key_path
 
     finally:
         if proc.poll() is None:
-            if sys.platform == "win32":
-                proc.terminate()
-            else:
-                proc.send_signal(signal.SIGINT)
             try:
-                proc.wait(timeout=5)
+                if sys.platform == "win32":
+                    os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
+                else:
+                    proc.send_signal(signal.SIGINT)
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
             except Exception:
-                # Force kill if termination fails
                 proc.kill()
+                proc.wait()
         os.chdir(orig_cwd)
 
 @pytest.mark.asyncio

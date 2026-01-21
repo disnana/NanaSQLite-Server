@@ -61,14 +61,20 @@ def ensure_test_server():
     env = os.environ.copy()
     env["NANASQLITE_DISABLE_BAN"] = "1"
     env["NANASQLITE_TEST_MODE"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
     
     # PYTHONPATHを明示的に設定 (カレントプロセスのsys.pathを使用)
     python_path = os.pathsep.join(sys.path)
     env["PYTHONPATH"] = python_path
     
     cmd = [sys.executable, "-m", "nanasqlite_server.server", "--port", str(port)]
-    proc = subprocess.Popen(cmd, env=env)  # noqa: S603
 
+    # Windows では新しいプロセスグループを作成してシグナルを送りやすくする
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs)  # noqa: S603
 
     # アクティブな起動確認 (ヘルスチェック)
     # 実際にQUIC接続を試みて、サーバーが応答するか確認する
@@ -85,22 +91,25 @@ def ensure_test_server():
                 return False  # プロセス終了
                 
             try:
-                # 接続試行 (タイムアウト短め)
-                async with connect("127.0.0.1", port, configuration=config) as _:
-                    # 接続できればOK
+                # 接続試行
+                async with connect("127.0.0.1", port, configuration=config):
                     return True
             except Exception:
-                # 接続失敗なら少し待って再試行
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(0.5)
         return False
 
     # 起動を待機
     import asyncio
     try:
-        if not asyncio.run(wait_for_server()):
+        # 新しいイベントループを作成して実行 (既存のループとの干渉を避ける)
+        loop = asyncio.new_event_loop()
+        success = loop.run_until_complete(wait_for_server())
+        loop.close()
+
+        if not success:
             if proc.poll() is not None:
                 stdout, stderr = proc.communicate()
-                raise RuntimeError(f"Test server process died. Code: {proc.returncode}\nStderr: {stderr}")
+                raise RuntimeError(f"Test server process died. Code: {proc.returncode}\nStdout: {stdout}\nStderr: {stderr}")
             else:
                 proc.kill()
                 raise RuntimeError("Timed out waiting for server to start accepting connections.")
@@ -115,15 +124,17 @@ def ensure_test_server():
         if proc.poll() is None:
             try:
                 if sys.platform == "win32":
-                    proc.terminate()
+                    # Windows では CTRL_BREAK_EVENT を送る
+                    os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
                 else:
                     proc.send_signal(signal.SIGINT)
 
                 try:
                     proc.wait(timeout=5)
-                except Exception:
-                    # Force kill if process doesn't terminate gracefully
+                except subprocess.TimeoutExpired:
+                    # 終わらなければ強制終了
                     proc.kill()
+                    proc.wait()
             except Exception:
-                # Catch any errors during signal sending
                 proc.kill()
+                proc.wait()
