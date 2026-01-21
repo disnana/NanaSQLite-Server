@@ -292,8 +292,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         args = message.get("args", [])
         kwargs = message.get("kwargs", {})
 
-        # 動的な権限剥奪の反映: 実行ごとにAccountManagerから最新のアカウント情報を取得 (1秒間隔でスロットル)
-        self.account_manager.load_accounts()
+        # 動的な権限剥奪の反映: watchfilesがバックグラウンドで最新に保っている
         current_account = next((a for a in self.account_manager.accounts if a.name == self.account.name), None)
         if not current_account:
             raise PermissionError(f"Account '{self.account.name}' has been disabled")
@@ -374,15 +373,14 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
     # AccountManagerの初期化
     account_manager = AccountManager(account_config, default_public_key)
 
-    # テスト環境用の調整
-    if os.environ.get("NANASQLITE_TEST_MODE"):
-        account_manager._load_throttle_interval = 0
-
     print(f"NanaSQLite QUIC Server starting on 127.0.0.1:{port}")
     print("Auth mode: Ed25519 Passkey (Challenge-Response)")
     print("Security: All DB operations run in executor (non-blocking)")
 
     try:
+        # アカウント情報の監視を開始
+        account_manager.start_watching()
+
         await serve(
             "127.0.0.1",
             port,
@@ -397,6 +395,9 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
         )
         await asyncio.Future()
     finally:
+        # 監視を停止
+        account_manager.stop_watching()
+
         # サーバー終了時にエグゼキューターをシャットダウン
         if _executor is not None:
             _executor.shutdown(wait=True)

@@ -24,6 +24,7 @@ dependencies = [
     "cryptography",
     "colorama",
     "ormsgpack",
+    "watchfiles",
 ]
 
 [project.optional-dependencies]
