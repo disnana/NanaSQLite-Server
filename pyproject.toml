@@ -35,7 +35,6 @@ dev = [
     "mypy",
     "pytest",
     "pytest-asyncio",
-    "pytest-xdist",
     "ruff",
     "tox",
     "types-colorama",

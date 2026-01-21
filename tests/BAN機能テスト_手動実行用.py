@@ -45,7 +45,9 @@ async def create_connection():
         verify_mode=ssl.CERT_NONE,
         server_name="localhost",
     )
-    ctx = connect(HOST, PORT, configuration=configuration, create_protocol=ClientProtocol)
+    ctx = connect(
+        HOST, PORT, configuration=configuration, create_protocol=ClientProtocol
+    )
     connection = await ctx.__aenter__()
     return ctx, connection
 
@@ -53,7 +55,7 @@ async def create_connection():
 async def test_ban_mechanism():
     """
     BAN機能の検証
-    
+
     複数回の認証失敗後にBANされることを確認します。
     """
     print("=" * 60)
@@ -62,9 +64,9 @@ async def test_ban_mechanism():
     print()
     print("警告: このテストを実行すると、サーバー再起動までBANされます")
     print()
-    
+
     ban_triggered = False
-    
+
     for attempt in range(5):
         try:
             ctx, conn = await create_connection()
@@ -74,11 +76,11 @@ async def test_ban_mechanism():
                     print(f"  試行 {attempt + 1}: 接続拒否 (既にBAN済み)")
                     ban_triggered = True
                     break
-                
+
                 # 無効な署名を送信
                 result = await conn.send_raw({"type": "response", "data": b"invalid"})
                 print(f"  試行 {attempt + 1}: {result}")
-                
+
                 if result == "AUTH_BANNED":
                     ban_triggered = True
                     print()
@@ -91,9 +93,9 @@ async def test_ban_mechanism():
             print(f"  試行 {attempt + 1}: 接続エラー - {e}")
             ban_triggered = True
             break
-        
+
         await asyncio.sleep(0.1)
-    
+
     print()
     print("=" * 60)
     if ban_triggered:
@@ -109,7 +111,7 @@ if __name__ == "__main__":
     print("※ このスクリプトはBAN機能のテスト用です")
     print("※ 実行後はサーバーの再起動が必要です")
     print()
-    
+
     confirm = input("実行しますか？ (y/N): ")
     if confirm.lower() == "y":
         asyncio.run(test_ban_mechanism())
