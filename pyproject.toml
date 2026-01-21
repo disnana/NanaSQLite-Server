@@ -59,3 +59,4 @@ ignore_missing_imports = true
 
 [tool.setuptools.dynamic]
 version = {attr = "nanasqlite_server.__version__"}
+
