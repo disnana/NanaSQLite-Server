@@ -94,7 +94,7 @@ class AccountManager:
                             logging.info(f"Account config change detected: {file_path}")
                             self._do_load()
             except asyncio.CancelledError:
-                pass
+                logging.debug("File watcher cancelled; exiting watch loop.")
             except Exception as e:
                 logging.error(f"Error in file watcher: {e}")
                 # エラー発生時はポーリングに切り替え
