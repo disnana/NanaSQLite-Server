@@ -126,8 +126,9 @@ class AccountManager:
                 self._watcher_task.cancel()
                 try:
                     await asyncio.wait_for(self._watcher_task, timeout=1.0)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 監視タスク強制終了時の予期しない例外はログに記録するが、停止処理自体は継続する
+                    logging.warning("Error while forcefully stopping watcher task: %s", e, exc_info=True)
             self._watcher_task = None
 
     def find_account_by_name(self, name):
