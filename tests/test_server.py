@@ -210,8 +210,7 @@ class TestRPCOperations:
                 "kwargs": {}
             })
             assert result.get("status") == "error"
-            # 現在の実装では属性アクセス自体を認可エラーとする
-            assert "accessible" in result.get("message", "").lower()
+            assert result.get("error_type") == "PermissionError"
 
 
 # =============================================================================

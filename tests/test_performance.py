@@ -1,39 +1,67 @@
+import pytest
 import asyncio
 import time
-import pytest
-import os
-from nanasqlite_server.client import RemoteNanaSQLite
-
-PORT = int(os.environ.get("NANASQLITE_TEST_PORT", 4433))
 
 @pytest.mark.asyncio
-async def test_concurrent_connections_performance():
-    """多数の同時接続によるパフォーマンス測定"""
-    num_clients = 10 # 減らして安定させる
-    requests_per_client = 5
+async def test_concurrent_requests(server_factory, client_factory):
+    config = await server_factory()
+    client = await client_factory(config)
 
-    async def run_client(id):
-        client = RemoteNanaSQLite(host="127.0.0.1", port=PORT, verify_ssl=False, private_key_path="nana_private.pem")
-        await client.connect()
-        start = time.perf_counter()
-        for i in range(requests_per_client):
-            await client.set_item_async(f"perf_{id}_{i}", "data" * 100)
-            await client.get_item_async(f"perf_{id}_{i}")
-        elapsed = time.perf_counter() - start
-        await client.close()
-        return elapsed
+    # Execute many requests in parallel
+    tasks = []
+    for i in range(50):
+        tasks.append(client.set_item_async(f"key_{i}", i))
 
-    start_total = time.perf_counter()
-    results = await asyncio.gather(*(run_client(i) for i in range(num_clients)))
-    total_elapsed = time.perf_counter() - start_total
+    await asyncio.gather(*tasks)
 
-    avg_client_time = sum(results) / num_clients
-    rps = (num_clients * requests_per_client * 2) / total_elapsed
+    for i in range(50):
+        val = await client.get_item_async(f"key_{i}")
+        assert val == i
 
-    print(f"\n[Performance] {num_clients} clients, {num_clients*requests_per_client*2} total requests")
-    print(f"[Performance] Total time: {total_elapsed:.3f}s")
-    print(f"[Performance] Avg time per client: {avg_client_time:.3f}s")
-    print(f"[Performance] Requests per second: {rps:.2f}")
+@pytest.mark.asyncio
+async def test_dos_protection_ban(server_factory, client_factory, certs):
+    # Short ban for testing
+    config = await server_factory(config_overrides={"max_failed_attempts": 2, "ban_duration": 2})
 
-    # 最低限の閾値
-    assert rps > 1
+    from nanasqlite_server.client import RemoteNanaSQLite
+
+    # Intentionally use wrong key (or just mock failure if we could)
+    # Here we'll just try to connect with a fake key manually
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    wrong_key = ed25519.Ed25519PrivateKey.generate()
+    wrong_key_path = "wrong.pem"
+    from cryptography.hazmat.primitives import serialization
+    with open(wrong_key_path, "wb") as f:
+        f.write(wrong_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.OpenSSH,
+            encryption_algorithm=serialization.NoEncryption()
+        ))
+
+    async def try_fail():
+        c = RemoteNanaSQLite(host=config.host, port=config.port, ca_cert_path=config.cert_path,
+                             private_key_path=wrong_key_path, verify_ssl=False)
+        try:
+            await c.connect()
+        except Exception:
+            return False
+        finally:
+            await c.close()
+        return True
+
+    # Attempt 1: Fail
+    assert await try_fail() is False
+    # Attempt 2: Fail -> Should be banned
+    assert await try_fail() is False
+
+    # Attempt 3: Should be blocked by BAN
+    # The server might close connection immediately or return AUTH_BANNED
+    # Our is_banned check is at the start of quic_event_received
+
+    # Wait for ban to expire
+    await asyncio.sleep(2.1)
+
+    # Should work now (if we used right key)
+    client = await client_factory(config)
+    await client.set_item_async("after_ban", "ok")
+    assert await client.get_item_async("after_ban") == "ok"

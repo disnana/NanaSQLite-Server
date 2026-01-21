@@ -172,6 +172,7 @@ jobs:
         echo "📝 bandit → ${{ needs.bandit.result == 'success' && '✓ success' || format('✗ {0}', needs.bandit.result) }} [required]"
         echo "📝 trivy → ${{ needs.trivy.result == 'success' && '✓ success' || format('✗ {0}', needs.trivy.result) }} [required]"
         echo "📝 grype → ${{ needs.grype.result == 'success' && '✓ success' || format('✗ {0}', needs.grype.result) }} [required]"
+        echo "📝 grype → ${{ needs.grype.result == 'success' && '✓ success' || format('✗ {0}', needs.grype.result) }} [required]"
         echo ""
         
         # If skipped

@@ -6,6 +6,7 @@ import functools
 import json
 import os
 import argparse
+import re
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from aioquic.asyncio import QuicConnectionProtocol, serve
@@ -16,51 +17,91 @@ from nanasqlite import NanaSQLite
 from nanasqlite.exceptions import NanaSQLiteError
 from . import protocol
 
-def safe_log(msg):
-    """ログ出力をサニタイズして、プリント不可能な文字を除去する（Log Injection対策）"""
-    if not isinstance(msg, str):
-        msg = str(msg)
-    return "".join(c for c in msg if c.isprintable())
+# --- Security & Logging ---
 
-# --- デフォルト設定 ---
-DEFAULT_CONFIG = {
-    "host": "127.0.0.1",
-    "port": 4433,
-    "cert_file": "cert.pem",
-    "key_file": "key.pem",
-    "db_path": "server_db.sqlite",
-    "max_failed_attempts": 3,
-    "ban_duration": 900,
-    "max_ban_list_size": 1000,
-    "max_buffer_size": 10 * 1024 * 1024, # 10MB
-    "max_active_streams": 100,
-    "accounts_file": "accounts.json"
-}
+def safe_log(msg: str):
+    """
+    Prevents Log Injection by neutralizing CRLF characters.
+    """
+    sanitized = msg.replace('\n', '\\n').replace('\r', '\\r')
+    logging.info(sanitized)
 
-# 禁止メソッド一覧 (デフォルト)
-DEFAULT_FORBIDDEN_METHODS = {
+# --- Configuration ---
+
+class ServerConfig:
+    def __init__(self):
+        self.port = 4433
+        self.host = "127.0.0.1"
+        self.public_key_path = "nana_public.pub"
+        self.cert_path = "cert.pem"
+        self.key_path = "key.pem"
+        self.db_dir = "./data"
+        self.accounts_path = "accounts.json"
+        self.ban_duration = 900
+        self.max_failed_attempts = 3
+        self.max_buffer_size = 10 * 1024 * 1024
+        self.max_ban_list_size = 10000
+
+    @classmethod
+    def load(cls, path):
+        config = cls()
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                data = json.load(f)
+                for k, v in data.items():
+                    if hasattr(config, k):
+                        setattr(config, k, v)
+        return config
+
+# --- RBAC & Account Management ---
+
+class AccountManager:
+    def __init__(self, accounts_path):
+        self.accounts_path = accounts_path
+        self.accounts = {}
+        self.load_accounts()
+
+    def load_accounts(self):
+        if os.path.exists(self.accounts_path):
+            try:
+                with open(self.accounts_path, "r") as f:
+                    self.accounts = json.load(f)
+            except Exception as e:
+                safe_log(f"Failed to load accounts: {e}")
+                self.accounts = {}
+        else:
+            # Default fallback for testing if no account file exists
+            self.accounts = {
+                "admin": {"role": "admin", "public_key": "nana_public.pub"}
+            }
+
+    def get_account(self, username):
+        return self.accounts.get(username)
+
+    def verify_permission(self, role, method_name):
+        if role == "admin":
+            return True
+        if role == "readonly":
+            # Allow basic read operations. load_all is allowed here.
+            return method_name in {"load_all", "get", "__getitem__", "__contains__", "__len__"}
+        return False
+
+# --- Global State ---
+
+_executor = ThreadPoolExecutor(max_workers=4)
+failed_attempts = {}
+ban_list = {}
+_db_instances = {}
+
+# Absolute No List (Methods that should NEVER be called via RPC)
+FORBIDDEN_METHODS = {
     "__init__", "close", "vacuum", "pragma", "execute", "execute_many",
     "query", "sql_insert", "sql_update", "sql_delete", "transaction",
     "begin_transaction", "commit", "rollback", "open", "connect",
-    "get_model", "set_model", "load_all", "refresh"
+    "get_model", "set_model", "refresh"
 }
 
-# BAN・失敗回数管理
-failed_attempts: dict[str, int] = {}
-ban_list: dict[str, float] = {}
-
-_executor = ThreadPoolExecutor(max_workers=4)
-_shared_db = None
-
-def get_shared_db(db_path):
-    global _shared_db
-    if _shared_db is None:
-        _shared_db = NanaSQLite(db_path, bulk_load=True)
-    return _shared_db
-
 def is_banned(ip, config):
-    if os.environ.get("NANASQLITE_DISABLE_BAN"):
-        return False
     now = time.time()
     expired_bans = [addr for addr, expire in ban_list.items() if now >= expire]
     for addr in expired_bans:
@@ -70,92 +111,36 @@ def is_banned(ip, config):
     return ip in ban_list
 
 def record_failed_attempt(ip, config):
-    if os.environ.get("NANASQLITE_DISABLE_BAN"):
-        return False
-    if len(failed_attempts) > config["max_ban_list_size"]:
+    if len(failed_attempts) > config.max_ban_list_size:
         failed_attempts.clear()
-
-    # IPを文字列として安全にする
-    safe_ip = safe_log(ip)
-    failed_attempts[safe_ip] = failed_attempts.get(safe_ip, 0) + 1
-    if failed_attempts[safe_ip] >= config["max_failed_attempts"]:
-        if len(ban_list) < config["max_ban_list_size"]:
-            ban_list[safe_ip] = time.time() + config["ban_duration"]
-            logging.warning(f"IP {safe_ip} has been BANNED")
+    failed_attempts[ip] = failed_attempts.get(ip, 0) + 1
+    if failed_attempts[ip] >= config.max_failed_attempts:
+        if len(ban_list) < config.max_ban_list_size:
+            ban_list[ip] = time.time() + config.ban_duration
+            safe_log(f"IP {ip} BANNED")
         return True
     return False
 
-class AccountManager:
-    """アカウントと権限の管理"""
-    def __init__(self, accounts_file):
-        self.accounts = {} # {public_key_bytes: {"name": str, "allowed": set, "forbidden": set, "key_obj": object}}
-        self.load_accounts(accounts_file)
+def get_db(db_name, db_dir):
+    if not re.match(r"^[a-zA-Z0-9_\-\.]+$", db_name) or ".." in db_name:
+        raise ValueError("Invalid database name")
+    if db_name not in _db_instances:
+        if not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+        db_path = os.path.join(db_dir, f"{db_name}.sqlite")
+        _db_instances[db_name] = NanaSQLite(db_path, bulk_load=True)
+    return _db_instances[db_name]
 
-    def load_accounts(self, filepath):
-        """アカウント設定をロードする。パストラバーサル防止のため、鍵パスはベースディレクトリ内で解決する。"""
-        # アカウントファイルのパスを正規化
-        abs_filepath = os.path.abspath(filepath)
-        base_dir = os.path.dirname(abs_filepath)
-
-        if not os.path.exists(abs_filepath):
-            logging.warning("Accounts file not found. Using default admin key if available.")
-            # デフォルトアカウント
-            default_key = "nana_public.pub"
-            if os.path.exists(default_key):
-                try:
-                    with open(default_key, "rb") as f:
-                        pk_bytes = f.read()
-                        pk_obj = serialization.load_ssh_public_key(pk_bytes)
-                        self.accounts[pk_bytes] = {
-                            "name": "default_admin",
-                            "allowed": ["*"],
-                            "forbidden": list(DEFAULT_FORBIDDEN_METHODS),
-                            "key_obj": pk_obj
-                        }
-                except Exception:
-                    logging.error("Failed to load default admin key")
-            return
-
-        try:
-            with open(abs_filepath, "r") as f:
-                data = json.load(f)
-                for acc in data:
-                    pk_path = acc.get("public_key_path")
-                    if not pk_path:
-                        continue
-
-                    # パストラバーサル防止: ファイル名のみをベースディレクトリで解決する
-                    # 外部入力(pk_path)からディレクトリ成分を除去し、意図しない場所へのアクセスを防ぐ
-                    pk_filename = os.path.basename(pk_path)
-                    safe_pk_path = os.path.join(base_dir, pk_filename)
-
-                    if os.path.exists(safe_pk_path):
-                        with open(safe_pk_path, "rb") as key_f:
-                            pk_content = key_f.read()
-                            try:
-                                pk_obj = serialization.load_ssh_public_key(pk_content)
-                                self.accounts[pk_content] = {
-                                    "name": acc.get("name"),
-                                    "allowed": set(acc.get("allowed", [])),
-                                    "forbidden": set(acc.get("forbidden", list(DEFAULT_FORBIDDEN_METHODS))),
-                                    "key_obj": pk_obj
-                                }
-                            except Exception:
-                                logging.error(f"Failed to load key for account {acc.get('name')}")
-        except Exception as e:
-            logging.error("Failed to load accounts")
-
-    def get_account(self, public_key_bytes):
-        return self.accounts.get(public_key_bytes)
+# --- Protocol ---
 
 class NanaRpcProtocol(QuicConnectionProtocol):
-    def __init__(self, account_manager, config, *args, **kwargs):
+    def __init__(self, config, account_manager, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.config = config
         self.account_manager = account_manager
         self.db = None
         self.authenticated = False
-        self.account_info = None # {"name": ..., "allowed": ..., "forbidden": ...}
+        self.user_role = None
         self.challenge = None
         self.client_ip = None
         self.stream_buffers = defaultdict(bytearray)
@@ -163,28 +148,21 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
     def connection_made(self, transport):
         super().connection_made(transport)
-        # 堅牢なIP取得ロジック (Cross-platform robustness)
         addr = None
         try:
-            # 1. 標準的なpeername
             peername = transport.get_extra_info("peername")
             if peername:
                 addr = peername[0]
-
-            # 2. ソケットから直接
             if not addr:
                 sock = transport.get_extra_info("socket")
                 if sock:
                     addr = sock.getpeername()[0]
-
-            # 3. aioquicの内部情報
             if not addr and hasattr(self._quic, '_peer_cid'):
                 addr = self._quic._peer_cid.host_addr
-        except Exception:
-            logging.debug("Failed to resolve client IP from transport.", exc_info=True)
-
-        self.client_ip = safe_log(addr or "unknown")
-        logging.info(f"New connection from: {self.client_ip}")
+        except Exception as e:
+            logging.debug("Could not resolve client IP: %s", e)
+        self.client_ip = addr or "unknown"
+        safe_log(f"Connection from: {self.client_ip}")
 
     def connection_lost(self, exc):
         self._background_tasks.clear()
@@ -194,21 +172,12 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         if is_banned(self.client_ip, self.config):
             self.close()
             return
-
         if isinstance(event, StreamDataReceived):
-            # 新規ストリームの場合、同時ストリーム数制限をチェック
-            if event.stream_id not in self.stream_buffers and \
-               len(self.stream_buffers) >= self.config.get("max_active_streams", 100):
-                logging.warning(f"Closing stream {event.stream_id} due to stream limit")
-                self._quic.reset_stream(event.stream_id, 0)
-                return
-
             self.stream_buffers[event.stream_id].extend(event.data)
-            if len(self.stream_buffers[event.stream_id]) > self.config["max_buffer_size"]:
+            if len(self.stream_buffers[event.stream_id]) > self.config.max_buffer_size:
                 self.stream_buffers.pop(event.stream_id)
                 self._quic.reset_stream(event.stream_id, 0)
                 return
-
             if event.end_stream:
                 data = bytes(self.stream_buffers.pop(event.stream_id))
                 task = asyncio.create_task(self.handle_request(event.stream_id, data))
@@ -217,79 +186,69 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
     async def handle_request(self, stream_id, data):
         try:
-            try:
-                message, _ = protocol.decode_message(data)
-            except Exception as e:
-                logging.warning(f"Failed to decode message: {e}")
+            message, _ = protocol.decode_message(data)
+            if message is None:
                 return
-
-            if message is None: return
-
             if not self.authenticated:
-                if message == "AUTH_START":
+                # Auth Phase 1: Challenge request
+                if message == "AUTH_START" or (isinstance(message, dict) and message.get("type") == "AUTH_START"):
+                    username = "admin"
+                    if isinstance(message, dict):
+                        username = message.get("username", "admin")
+
+                    account = self.account_manager.get_account(username)
+                    if not account:
+                        self._send_response(stream_id, "AUTH_FAILED")
+                        return
+                    self.current_user = username
                     self.challenge = secrets.token_bytes(32)
                     self._send_response(stream_id, {"type": "challenge", "data": self.challenge})
                     return
-
+                # Auth Phase 2: Signature verification
                 if isinstance(message, dict) and message.get("type") == "response":
-                    if self.challenge is None:
+                    if self.challenge is None or not hasattr(self, 'current_user'):
                         self._send_response(stream_id, "AUTH_FAILED")
                         return
-
-                    signature = message.get("data")
-                    # すべての登録済みアカウントの鍵で検証を試みる
-                    found_account = None
-                    for info in self.account_manager.accounts.values():
-                        try:
-                            pk = info.get("key_obj")
-                            if pk:
-                                pk.verify(signature, self.challenge)
-                                found_account = info
-                                break
-                        except Exception: # nosec B112
-                            continue
-
-                    if found_account:
+                    account = self.account_manager.get_account(self.current_user)
+                    pub_key_path = account.get("public_key")
+                    try:
+                        with open(pub_key_path, "rb") as f:
+                            public_key = serialization.load_ssh_public_key(f.read())
+                        public_key.verify(message.get("data"), self.challenge)
                         self.authenticated = True
-                        self.account_info = found_account
-                        self.db = get_shared_db(self.config["db_path"])
+                        self.user_role = account.get("role", "readonly")
+                        db_name = message.get("db", "default")
+                        self.db = get_db(db_name, self.config.db_dir)
                         if self.client_ip in failed_attempts:
                             del failed_attempts[self.client_ip]
-                        response = "AUTH_OK"
-                        logging.info(f"Auth successful: {safe_log(found_account['name'])} from {self.client_ip}")
-                    else:
-                        is_now_banned = record_failed_attempt(self.client_ip, self.config)
-                        response = "AUTH_BANNED" if is_now_banned else "AUTH_FAILED"
-
-                    self._send_response(stream_id, response)
+                        self._send_response(stream_id, "AUTH_OK")
+                        safe_log(f"Auth Success: {self.current_user} ({self.user_role}) from {self.client_ip}")
+                    except Exception as e:
+                        safe_log(f"Auth Failed: {self.client_ip} - {e}")
+                        if record_failed_attempt(self.client_ip, self.config):
+                            self._send_response(stream_id, "AUTH_BANNED")
+                        else:
+                            self._send_response(stream_id, "AUTH_FAILED")
                     return
-
                 self._send_response(stream_id, {"status": "error", "message": "Unauthorized"})
                 return
 
-            if self.authenticated:
-                if message == "AUTH_START":
-                    self._send_response(stream_id, {"status": "error", "message": "Already authenticated"})
-                    return
-                result = await self.execute_rpc(message)
-                self._send_response(stream_id, result)
+            # RPC Execution
+            # [FIX] Handle legacy "AUTH_START" message in authenticated state
+            if message == "AUTH_START" or (isinstance(message, dict) and message.get("type") == "AUTH_START"):
+                self._send_response(stream_id, {"status": "error", "message": "Already authenticated"})
+                return
 
-        except (PermissionError, ValueError, AttributeError, RuntimeError, NanaSQLiteError) as e:
-            # クライアントに返しても比較的安全なエラーだが、内容はサニタイズする
-            safe_message = str(e)
-            # パス情報が含まれやすい文字列を置換
-            for forbidden_word in [os.getcwd(), os.sep, "/"]:
-                if forbidden_word and len(forbidden_word) > 1:
-                    safe_message = safe_message.replace(forbidden_word, "[PATH]")
-
+            result = await self.execute_rpc(message)
+            self._send_response(stream_id, result)
+        except (PermissionError, ValueError, AttributeError, NanaSQLiteError) as e:
             self._send_response(stream_id, {
                 "status": "error",
                 "error_type": type(e).__name__,
-                "message": safe_message
+                "message": str(e)
             })
         except Exception as e:
-            # 予期しないエラーは詳細を隠す (情報漏洩対策)
-            logging.error(f"Unexpected error handling request: {e}", exc_info=True)
+            safe_log(f"Internal Error: {e}")
             self._send_response(stream_id, {
                 "status": "error",
                 "error_type": "InternalServerError",
@@ -298,123 +257,68 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
     async def execute_rpc(self, message):
         if not isinstance(message, dict):
-            raise ValueError("RPC message must be a dictionary")
-
-        # メソッド名の検証
-        method_name = message.get("method")
-        if not isinstance(method_name, str):
-            raise ValueError("Method name must be a string")
-
-        if not method_name.isidentifier() and not (method_name.startswith("__") and method_name.endswith("__")):
-            raise ValueError("Invalid method name format")
-
+            raise ValueError("Invalid RPC format")
+        method_name = str(message.get("method"))
         args = message.get("args", [])
-        if not isinstance(args, list):
-            raise ValueError("Arguments must be a list")
-
         kwargs = message.get("kwargs", {})
-        if not isinstance(kwargs, dict):
-            raise ValueError("Keyword arguments must be a dictionary")
 
-        # 権限チェック (RBAC)
-        allowed = self.account_info["allowed"]
-        forbidden = self.account_info["forbidden"]
+        # Absolute Blacklist Check FIRST
+        if method_name in FORBIDDEN_METHODS:
+            raise PermissionError(f"Method '{method_name}' is globally forbidden")
 
-        # 特殊メソッドの定義
-        WRITE_SPECIAL = {"__setitem__", "__delitem__"}
-        READ_SPECIAL = {"__getitem__", "__contains__", "__len__"}
-        VALID_SPECIAL = READ_SPECIAL | WRITE_SPECIAL
+        # RBAC Check SECOND
+        if not self.account_manager.verify_permission(self.user_role, method_name):
+            raise PermissionError(f"Role '{self.user_role}' lacks permission for '{method_name}'")
 
-        # 1. 禁止リストチェック (最優先)
-        if method_name in forbidden:
-            raise PermissionError(f"Method '{safe_log(method_name)}' is forbidden for your account")
-
-        # 2. 許可リストチェック
-        is_allowed = False
-        if "*" in allowed:
-            is_allowed = True
-        elif method_name in allowed:
-            is_allowed = True
-        elif method_name in READ_SPECIAL:
-            # 読み取り専用特殊メソッドは全アカウントにデフォルトで許可
-            is_allowed = True
-
-        if not is_allowed:
-            raise PermissionError(f"Method '{safe_log(method_name)}' is not allowed for your account")
-
-        # 3. NanaSQLiteに存在するか確認 (getattrの安全な利用)
-        # 有効な公開メソッドと、定義済みの特殊メソッドのみを対象にする
-        public_methods = {name for name in dir(NanaSQLite) if not name.startswith("_")}
-
-        if method_name in public_methods:
-            pass
-        elif method_name in VALID_SPECIAL:
-            pass
+        if hasattr(self.db, method_name):
+            method = getattr(self.db, method_name)
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                _executor,
+                functools.partial(method, *args, **kwargs)
+            )
+            return {"status": "success", "result": result}
         else:
-             # それ以外の属性アクセス（非公開属性や存在しない属性）は一律拒否
-             raise PermissionError(f"Method '{safe_log(method_name)}' is not an accessible NanaSQLite method")
-
-        if not hasattr(self.db, method_name):
-            raise AttributeError("Requested method not found on NanaSQLite object")
-
-        method = getattr(self.db, method_name)
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            _executor,
-            functools.partial(method, *args, **kwargs)
-        )
-        return {"status": "success", "result": result}
+            raise AttributeError(f"Method '{method_name}' not found")
 
     def _send_response(self, stream_id, data):
         payload = protocol.encode_message(data)
         self._quic.send_stream_data(stream_id, payload, end_stream=True)
         self.transmit()
 
-async def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=".env", help="Path to config file")
-    args = parser.parse_args()
-
-    # パスインジェクション防止: 設定ファイルのパスを正規化
-    raw_config_path = args.config
-    abs_config_path = os.path.abspath(raw_config_path)
-
-    # シンプルな設定ロード
-    config = DEFAULT_CONFIG.copy()
-    if os.path.exists(abs_config_path):
-        try:
-            with open(abs_config_path, "r") as f:
-                for line in f:
-                    if "=" in line and not line.startswith("#"):
-                        parts = line.strip().split("=", 1)
-                        if len(parts) == 2:
-                            k, v = parts
-                            if k in config:
-                                if isinstance(config[k], int): config[k] = int(v)
-                                else: config[k] = v
-        except Exception as e:
-            logging.error("Failed to load config file")
-
-    logging.basicConfig(level=logging.INFO)
-    account_manager = AccountManager(config["accounts_file"])
-
-    quic_config = QuicConfiguration(is_client=False)
-    quic_config.load_cert_chain(config["cert_file"], config["key_file"])
-
-    logging.info(f"Starting NanaSQLite Server on {config['host']}:{config['port']}")
-    await serve(
-        config["host"], config["port"],
-        configuration=quic_config,
-        create_protocol=lambda *args, **kwargs: NanaRpcProtocol(account_manager, config, *args, **kwargs)
-    )
-    await asyncio.Future()
-
 def main_sync():
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        # ユーザーによる中断を安全に無視
         pass
+
+async def main():
+    parser = argparse.ArgumentParser(description="NanaSQLite Next-Gen Server")
+    parser.add_argument("--config", type=str, default="config.json", help="Path to config file")
+    parser.add_argument("--port", type=int, help="Override port")
+    args = parser.parse_args()
+
+    config = ServerConfig.load(args.config)
+    if args.port:
+        config.port = args.port
+
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    account_manager = AccountManager(config.accounts_path)
+
+    quic_config = QuicConfiguration(is_client=False)
+    quic_config.load_cert_chain(config.cert_path, config.key_path)
+
+    safe_log(f"Starting server on {config.host}:{config.port}")
+
+    await serve(
+        config.host,
+        config.port,
+        configuration=quic_config,
+        create_protocol=lambda *args, **kwargs: NanaRpcProtocol(
+            config, account_manager, *args, **kwargs
+        ),
+    )
+    await asyncio.Future()
 
 if __name__ == "__main__":
     main_sync()

@@ -1,6 +1,5 @@
 import asyncio
 import ssl
-import os
 from aioquic.asyncio import QuicConnectionProtocol, connect
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived
@@ -42,9 +41,7 @@ def load_private_key():
     with open(PRIVATE_KEY_PATH, "rb") as f:
         return serialization.load_pem_private_key(f.read(), password=None)
 
-PORT = int(os.environ.get("NANASQLITE_TEST_PORT", 4433))
-
-async def create_connection(host="127.0.0.1", port=PORT):
+async def create_connection(host="127.0.0.1", port=4433):
     configuration = QuicConfiguration(
         is_client=True,
         verify_mode=ssl.CERT_NONE,
