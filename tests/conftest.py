@@ -1,6 +1,5 @@
 import pytest
 import asyncio
-import os
 import json
 import socket
 import logging
