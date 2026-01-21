@@ -168,8 +168,8 @@ class NanaRpcProtocol(QuicConnectionProtocol):
     def connection_lost(self, exc):
         """Clean up background tasks when connection is lost
         
-        Clear task references when connection terminates. Running tasks
-        will complete or be cancelled depending on their current state.
+        Clear task references when connection terminates. Tasks that are
+        still running will continue to completion naturally.
         """
         self._background_tasks.clear()
         super().connection_lost(exc)
