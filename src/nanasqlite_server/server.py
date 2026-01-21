@@ -89,9 +89,9 @@ class AccountManager:
 # --- Global State ---
 
 _executor = ThreadPoolExecutor(max_workers=4)
-failed_attempts = {}
-ban_list = {}
-_db_instances = {}
+failed_attempts: dict[str, int] = {}
+ban_list: dict[str, float] = {}
+_db_instances: dict[str, NanaSQLite] = {}
 
 # Absolute No List (Methods that should NEVER be called via RPC)
 FORBIDDEN_METHODS = {
@@ -144,6 +144,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         self.challenge = None
         self.client_ip = None
         self.stream_buffers = defaultdict(bytearray)
+        # Store task references to prevent premature GC in Python 3.13+
         self._background_tasks = set()
 
     def connection_made(self, transport):
@@ -165,6 +166,11 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         safe_log(f"Connection from: {self.client_ip}")
 
     def connection_lost(self, exc):
+        """Clean up background tasks when connection is lost
+        
+        Clear task references when connection terminates. Tasks that are
+        still running will continue to completion naturally.
+        """
         self._background_tasks.clear()
         super().connection_lost(exc)
 

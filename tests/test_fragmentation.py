@@ -13,7 +13,6 @@ class FragClientProtocol(QuicConnectionProtocol):
         self._responses = asyncio.Queue()
 
     def quic_event_received(self, event):
-        from aioquic.quic.events import StreamDataReceived
         if isinstance(event, StreamDataReceived):
             message, _ = protocol.decode_message(event.data)
             self._responses.put_nowait(message)

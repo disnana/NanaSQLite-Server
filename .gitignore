@@ -1,6 +1,7 @@
 *.pem
 *.pub
 *.sqlite
+*.lock
 data/
 accounts*.json
 config.json
