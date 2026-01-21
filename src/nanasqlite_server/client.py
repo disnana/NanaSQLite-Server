@@ -1,7 +1,7 @@
 import asyncio
 import builtins
 import ssl
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import nanasqlite.exceptions as nana_exc
 from aioquic.asyncio import QuicConnectionProtocol, connect

@@ -13,7 +13,8 @@ from nanasqlite_server.client import RemoteNanaSQLite
 
 def get_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
+        # Bind only to the loopback interface to avoid exposing on all interfaces
+        s.bind(('127.0.0.1', 0))
         return s.getsockname()[1]
 
 @pytest.fixture(scope="session")
@@ -107,7 +108,7 @@ async def server_factory(certs, tmp_path):
         try:
             await s
         except asyncio.CancelledError:
-            pass
+            logging.getLogger(__name__).debug("Server task cancelled during teardown")
 
 @pytest.fixture
 async def client_factory(certs):

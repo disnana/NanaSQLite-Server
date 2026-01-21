@@ -1,5 +1,4 @@
 import pytest
-import asyncio
 
 @pytest.mark.asyncio
 async def test_rbac_admin_vs_readonly(server_factory, client_factory):

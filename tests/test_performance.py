@@ -1,6 +1,5 @@
 import pytest
 import asyncio
-import time
 
 @pytest.mark.asyncio
 async def test_concurrent_requests(server_factory, client_factory):
