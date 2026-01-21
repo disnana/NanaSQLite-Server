@@ -104,6 +104,7 @@ class AccountManager:
                     account.public_key.verify(signature, challenge)
                     return account
                 except Exception:
+                    # Invalid signature for this account hint, but we allow fall-through to linear search
                     pass
 
         # 線形探索 (後方互換性)
@@ -114,5 +115,6 @@ class AccountManager:
                 account.public_key.verify(signature, challenge)
                 return account
             except Exception:
+                # Signature verification failed for this account, try next one
                 continue
         return None

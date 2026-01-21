@@ -118,6 +118,8 @@ def ensure_test_server():
                 try:
                     proc.wait(timeout=5)
                 except Exception:
-                    proc.terminate()
+                    # Force kill if process doesn't terminate gracefully
+                    proc.kill()
             except Exception:
+                # Catch any errors during signal sending
                 proc.kill()

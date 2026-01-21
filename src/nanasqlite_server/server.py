@@ -368,6 +368,7 @@ async def main(allowed_methods=None, forbidden_methods=None, port=4433, account_
             with open(PUBLIC_KEY_PATH, "rb") as f:
                 default_public_key = f.read().decode()
     except Exception:
+        # Ignore if public key is not readable or missing
         pass
 
     # AccountManagerの初期化

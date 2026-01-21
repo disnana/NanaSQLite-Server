@@ -34,12 +34,8 @@ def test_keys():
 async def dedicated_server(tmp_path):
     """各テスト用に独立したサーバーを起動するフィクスチャ"""
     # 鍵と証明書の準備
-    cert_path = tmp_path / "cert.pem"
-    key_path = tmp_path / "key.pem"
-    pub_key_path = tmp_path / "nana_public.pub"
     priv_key_path = tmp_path / "nana_private.pem"
     config_path = tmp_path / "accounts.json"
-    db_path = tmp_path / "test_db.sqlite"
 
     orig_cwd = os.getcwd()
     os.chdir(tmp_path)
@@ -183,6 +179,7 @@ async def test_anti_dos_stream_limit(dedicated_server):
                 conn._quic.send_stream_data(stream_id, b"data", end_stream=False)
                 conn.transmit()
             except Exception:
+                # Connection might be reset or closed by server due to limits
                 break
 
         await asyncio.sleep(0.5)
@@ -205,10 +202,12 @@ async def test_anti_dos_total_buffer_limit(dedicated_server):
                 conn.transmit()
                 await asyncio.sleep(0.01)
             except Exception:
+                # Connection closed by server due to buffer limits
                 break
 
         await asyncio.sleep(0.5)
         try:
             await conn.call_rpc("AUTH_START")
         except Exception:
+            # Expected failure if connection is closed
             pass
