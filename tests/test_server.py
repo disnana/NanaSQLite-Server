@@ -20,7 +20,7 @@ from aioquic.asyncio import QuicConnectionProtocol, connect
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived
 from cryptography.hazmat.primitives import serialization
-import protocol
+from nanasqlite_server import protocol
 
 import os
 
