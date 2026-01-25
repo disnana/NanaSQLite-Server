@@ -342,6 +342,8 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             ValueError,
             AttributeError,
             RuntimeError,
+            KeyError,
+            TypeError,
             NanaSQLiteError,
         ) as e:
             # クライアントに返しても安全なエラー (NanaSQLiteErrorを追加)
@@ -351,7 +353,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             )
         except Exception as e:
             # 予期しないエラーは詳細を隠す (情報漏洩対策)
-            print(f"Unexpected error handling request: {e}")
+            logging.error(f"Unexpected error ({type(e).__name__}) handling request: {e}")
             self._send_response(
                 stream_id,
                 {

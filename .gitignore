@@ -10,3 +10,6 @@ nana_public.pub
 *.txt
 src/nanasqlite_server.egg-info/
 *.lock
+*.sqlite-wal
+*.sqlite
+*.sqlite-shm

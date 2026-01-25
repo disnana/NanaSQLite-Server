@@ -2,3 +2,4 @@ aioquic
 nanasqlite
 cryptography
 colorama
+ormsgpack
