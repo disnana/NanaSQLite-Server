@@ -14,3 +14,4 @@ src/nanasqlite_server.egg-info/
 *.sqlite
 *.sqlite-shm
 *.log
+*.json

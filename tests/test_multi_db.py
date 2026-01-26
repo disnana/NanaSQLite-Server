@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import pytest
-import ssl
 from nanasqlite_server.client import RemoteNanaSQLite
 from nanasqlite_server.cert_gen import generate_certificate
 import subprocess
@@ -80,25 +79,25 @@ async def multi_db_server(tmp_path, test_keys):
             creationflags=creationflags
         )
 
-        # Wait for server
-        from aioquic.quic.configuration import QuicConfiguration
-        from aioquic.asyncio import connect
+        # Wait for server to start
+        start = time.time()
+        ready = False
         
-        async def try_connect():
-            try:
-                async with connect("127.0.0.1", port, configuration=config):
-                    return True
-            except Exception:
-                return False
-
         while time.time() - start < 60:
             if proc.poll() is not None:
                 # Process died
                 break
             
-            if await try_connect():
+            # Try to connect to check if server is ready
+            try:
+                test_client = RemoteNanaSQLite(host="127.0.0.1", port=port, verify_ssl=False)
+                test_client.private_key = priv
+                await test_client.connect(account_name="tester")
+                await test_client.close()
                 ready = True
                 break
+            except Exception:
+                pass
             
             await asyncio.sleep(1.0)
         
