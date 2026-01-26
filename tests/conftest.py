@@ -68,6 +68,7 @@ def ensure_test_server():
     env["PYTHONPATH"] = python_path
 
     db_path = "server_db_test.sqlite"
+    PUBLIC_KEY_PATH = "nana_public.pub"
     
     # Create accounts.json with multi-DB support  
     accounts_config = {
