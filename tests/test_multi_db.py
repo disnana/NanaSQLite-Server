@@ -72,8 +72,11 @@ async def multi_db_server(tmp_path, test_keys):
         else:
             creationflags = 0
 
+        log_file_path = tmp_path / "multi_db_server.log"
+        log_file = open(log_file_path, "w", encoding="utf-8")
+
         proc = subprocess.Popen(
-            cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True,
             creationflags=creationflags
         )
 
@@ -90,22 +93,28 @@ async def multi_db_server(tmp_path, test_keys):
                 break
             try:
                 # Use a shorter timeout for each connection attempt
-                conn = await asyncio.wait_for(connect("127.0.0.1", port, configuration=config), timeout=1.0)
+                conn = await asyncio.wait_for(connect("127.0.0.1", port, configuration=config), timeout=2.0)
                 await conn.close()
                 ready = True
                 break
             except Exception:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.0)
         
         if not ready:
+            if proc.poll() is not None:
+                log_file.close()
+                with open(log_file_path, "r", encoding="utf-8") as f:
+                    log_content = f.read()
+                raise RuntimeError(f"Server died with code {proc.returncode}. Log:\n{log_content}")
             proc.kill()
-            raise RuntimeError("Server failed to start")
+            raise RuntimeError("Server failed to start within timeout.")
             
         yield port, priv, db_dir
     finally:
         if proc and proc.poll() is None:
             proc.terminate()
             proc.wait()
+        log_file.close()
         os.chdir(orig_cwd)
 
 @pytest.mark.asyncio
