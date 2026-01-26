@@ -90,9 +90,10 @@ async def multi_db_server(tmp_path, test_keys):
                 break
             try:
                 # Use a shorter timeout for each connection attempt
-                async with asyncio.wait_for(connect("127.0.0.1", port, configuration=config), timeout=1.0):
-                    ready = True
-                    break
+                conn = await asyncio.wait_for(connect("127.0.0.1", port, configuration=config), timeout=1.0)
+                await conn.close()
+                ready = True
+                break
             except Exception:
                 await asyncio.sleep(0.5)
         

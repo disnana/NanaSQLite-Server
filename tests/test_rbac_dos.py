@@ -234,7 +234,7 @@ async def test_realtime_policy_update(test_keys, dedicated_server):
 @pytest.mark.asyncio
 async def test_anti_dos_stream_limit(dedicated_server):
     """Anti-DoS: 未認証時の同時ストリーム数制限"""
-    port, _, _ = dedicated_server
+    port, _, _, _ = dedicated_server
     config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
 
     async with connect(
@@ -266,7 +266,7 @@ async def test_anti_dos_stream_limit(dedicated_server):
 @pytest.mark.asyncio
 async def test_anti_dos_total_buffer_limit(dedicated_server):
     """Anti-DoS: 未認証時の合計バッファ制限"""
-    port, _, _ = dedicated_server
+    port, _, _, _ = dedicated_server
     config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
 
     async with connect(

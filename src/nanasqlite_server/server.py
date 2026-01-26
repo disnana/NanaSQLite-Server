@@ -155,7 +155,7 @@ def validate_db_path(base_dir, db_name):
     safe_name = os.path.normpath(db_name)
 
     # 絶対パスや '..' を含むパスの拒否（追加の安全策）
-    if os.isabs(safe_name) or ".." in safe_name.split(os.sep):
+    if os.path.isabs(safe_name) or ".." in safe_name.split(os.sep):
         raise PermissionError(f"Invalid characters in DB name: {db_name}")
 
     # パス結合
