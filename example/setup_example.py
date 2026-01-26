@@ -26,12 +26,14 @@ def setup():
         public_key = f.read().strip()
     
     accounts = {
+        "db_dir": ".",  # カレントディレクトリをDBのルートとする
         "accounts": [
             {
                 "name": "example_user",
                 "public_key": public_key,
                 "allowed_methods": None,  # Noneは制限なし
-                "forbidden_methods": []
+                "forbidden_methods": [],
+                "allowed_dbs": ["example.sqlite"]
             }
         ]
     }
