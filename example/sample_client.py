@@ -30,14 +30,16 @@ async def run_test():
     try:
         await client.connect(account_name="example_user")
         
-        # 2. 基本的なデータ操作のテスト
-        print(f"\n{Fore.YELLOW}[Step 1] Basic Data Operations{Style.RESET_ALL}")
+        # 2. 基本的なデータ操作のテスト (デフォルトDB)
+        print(f"\n{Fore.YELLOW}[Step 1] Basic Data Operations (Default DB){Style.RESET_ALL}")
         
-        print("Setting data: 'greeting' = 'Hello from Client!'")
+        print("Setting data in default DB: 'greeting' = 'Hello from Client!'")
         await client.set_item_async("greeting", "Hello from Client!")
+        # 明示的にDBを指定することも可能
+        # await client.set_item_async("greeting", "Hello!", db="example.sqlite")
         
         val = await client.get_item_async("greeting")
-        print(f"Read back: {val}")
+        print(f"Read back from default DB: {val}")
         
         if val == "Hello from Client!":
             print(f"{Fore.GREEN}✓ Success{Style.RESET_ALL}")

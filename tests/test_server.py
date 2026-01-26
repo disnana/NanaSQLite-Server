@@ -177,13 +177,13 @@ class TestRPCOperations:
 
             # SET
             result = await conn.send_raw(
-                {"method": "__setitem__", "args": [test_key, test_value], "kwargs": {}}
+                {"method": "__setitem__", "args": [test_key, test_value], "kwargs": {}, "db": "server_db_test.sqlite"}
             )
             assert result.get("status") == "success"
 
             # GET
             result = await conn.send_raw(
-                {"method": "__getitem__", "args": [test_key], "kwargs": {}}
+                {"method": "__getitem__", "args": [test_key], "kwargs": {}, "db": "server_db_test.sqlite"}
             )
             assert result.get("status") == "success"
             assert result.get("result") == test_value
@@ -206,7 +206,7 @@ class TestRPCOperations:
             await authenticate(conn, private_key)
 
             result = await conn.send_raw(
-                {"method": "nonexistent_method", "args": [], "kwargs": {}}
+                {"method": "nonexistent_method", "args": [], "kwargs": {}, "db": "server_db_test.sqlite"}
             )
             assert result.get("status") == "error"
             assert result.get("error_type") == "PermissionError"
@@ -238,6 +238,7 @@ class TestBlocking:
                                 {"data": "x" * 100},
                             ],
                             "kwargs": {},
+                            "db": "server_db_test.sqlite"
                         }
                     )
                 elapsed = time.perf_counter() - start

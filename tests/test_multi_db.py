@@ -1,0 +1,160 @@
+import asyncio
+import json
+import os
+import pytest
+from nanasqlite_server.client import RemoteNanaSQLite
+from nanasqlite_server.cert_gen import generate_certificate
+import subprocess
+import sys
+import time
+
+@pytest.fixture
+def test_keys():
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    public_key = private_key.public_key()
+    from cryptography.hazmat.primitives import serialization
+    pub_bytes = public_key.public_bytes(
+        encoding=serialization.Encoding.OpenSSH,
+        format=serialization.PublicFormat.OpenSSH,
+    ).decode()
+    return private_key, pub_bytes
+
+@pytest.fixture
+async def multi_db_server(tmp_path, test_keys):
+    priv, pub = test_keys
+    db_dir = tmp_path / "dbs"
+    db_dir.mkdir()
+    
+    config_path = tmp_path / "accounts.json"
+    with open(config_path, "w") as f:
+        json.dump({
+            "db_dir": str(db_dir),
+            "accounts": [
+                {
+                    "name": "tester",
+                    "public_key": pub,
+                    "allowed_dbs": ["db1.sqlite", "db2.sqlite", "subdir/db3.sqlite"]
+                }
+            ]
+        }, f)
+    
+    # Create subdir
+    (db_dir / "subdir").mkdir()
+
+    orig_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    # Start server process
+    proc = None
+    try:
+        generate_certificate()
+        
+        # Use a random port
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = orig_cwd + os.pathsep + os.path.join(orig_cwd, "src")
+        env["NANASQLITE_FORCE_POLLING"] = "1"
+        
+        cmd = [
+            sys.executable, "-m", "nanasqlite_server.server",
+            "--port", str(port),
+            "--accounts", str(config_path)
+        ]
+        
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            creationflags = 0
+
+        log_file_path = tmp_path / "multi_db_server.log"
+        log_file = open(log_file_path, "w", encoding="utf-8")
+
+        proc = subprocess.Popen(
+            cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True,
+            creationflags=creationflags
+        )
+
+        # Wait for server to start
+        start = time.time()
+        ready = False
+        
+        while time.time() - start < 60:
+            if proc.poll() is not None:
+                # Process died
+                break
+            
+            # Try to connect to check if server is ready
+            try:
+                test_client = RemoteNanaSQLite(host="127.0.0.1", port=port, verify_ssl=False)
+                test_client.private_key = priv
+                await test_client.connect(account_name="tester")
+                await test_client.close()
+                ready = True
+                break
+            except Exception:
+                pass
+            
+            await asyncio.sleep(1.0)
+        
+        if not ready:
+            if proc.poll() is not None:
+                log_file.close()
+                with open(log_file_path, "r", encoding="utf-8") as f:
+                    log_content = f.read()
+                raise RuntimeError(f"Server died with code {proc.returncode}. Log:\n{log_content}")
+            proc.kill()
+            raise RuntimeError("Server failed to start within timeout.")
+            
+        yield port, priv, db_dir
+    finally:
+        if proc and proc.poll() is None:
+            proc.terminate()
+            proc.wait()
+        log_file.close()
+        os.chdir(orig_cwd)
+
+@pytest.mark.asyncio
+async def test_multi_db_access(multi_db_server):
+    port, priv, db_dir = multi_db_server
+    
+    client = RemoteNanaSQLite(host="127.0.0.1", port=port, verify_ssl=False)
+    client.private_key = priv
+    
+    try:
+        await client.connect(account_name="tester")
+        
+        # Access DB1
+        await client.__getattr__("__setitem__")("key1", "val1", db="db1.sqlite")
+        assert await client.__getattr__("__getitem__")("key1", db="db1.sqlite") == "val1"
+        
+        # Access DB2
+        await client.__getattr__("__setitem__")("key2", "val2", db="db2.sqlite")
+        assert await client.__getattr__("__getitem__")("key2", db="db2.sqlite") == "val2"
+        
+        # Verify they are separate files
+        assert os.path.exists(db_dir / "db1.sqlite")
+        assert os.path.exists(db_dir / "db2.sqlite")
+        
+        # Access Subdir DB
+        await client.__getattr__("__setitem__")("key3", "val3", db="subdir/db3.sqlite")
+        assert await client.__getattr__("__getitem__")("key3", db="subdir/db3.sqlite") == "val3"
+        assert os.path.exists(db_dir / "subdir" / "db3.sqlite")
+        
+        # Unauthorized DB access
+        with pytest.raises(Exception) as exc:
+            await client.__getattr__("__getitem__")("key", db="secret.sqlite")
+        assert "not allowed" in str(exc.value).lower()
+        
+        # Traversal attempt
+        with pytest.raises(Exception) as exc:
+            await client.__getattr__("__getitem__")("key", db="../config.json")
+        # Server returns "not allowed" for unauthorized database access
+        assert "not allowed" in str(exc.value).lower()
+
+    finally:
+        await client.close()

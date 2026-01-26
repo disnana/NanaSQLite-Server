@@ -63,7 +63,13 @@ async def dedicated_server(tmp_path):
         env["PYTHONUNBUFFERED"] = "1"
         env["NANASQLITE_FORCE_POLLING"] = "1"
 
+        db_dir = str(tmp_path)
         db_path = tmp_path / "dedicated_server_db.sqlite"
+        
+        # Provide db_dir in config
+        with open(config_path, "w") as f:
+            json.dump({"db_dir": db_dir, "accounts": []}, f)
+
         cmd = [
             sys.executable,
             "-m",
@@ -72,8 +78,11 @@ async def dedicated_server(tmp_path):
             str(port),
             "--accounts",
             str(config_path),
-            "--db",
-            str(db_path),
+            # --db argument is deprecated/legacy but still accepted by argparse, 
+            # effectively ignored by new logic if multi-DB is used correctly via accounts.
+            # We keep it to avoid changing server argument parsing logic if not necessary.
+            "--db", 
+            str(db_path), 
         ]
 
         # パイプ詰まりによるハングアップを防ぐため
@@ -116,7 +125,7 @@ async def dedicated_server(tmp_path):
                     "Dedicated server failed to start (QUIC check failed)"
                 )
 
-        yield port, config_path, priv_key_path
+        yield port, config_path, priv_key_path, db_dir
 
     finally:
         if proc.poll() is None:
@@ -140,18 +149,20 @@ async def dedicated_server(tmp_path):
 @pytest.mark.asyncio
 async def test_rbac_permissions(test_keys, dedicated_server):
     """RBAC: アカウントごとの権限制限が機能することを確認"""
-    port, config_path, _ = dedicated_server
+    port, config_path, _, db_dir = dedicated_server
     priv, pub = test_keys
 
     with open(config_path, "w") as f:
         json.dump(
             {
+                "db_dir": db_dir,
                 "accounts": [
                     {
                         "name": "readonly",
                         "public_key": pub,
                         "allowed_methods": None,
                         "forbidden_methods": ["__setitem__"],
+                        "allowed_dbs": ["dedicated_server_db.sqlite"]
                     }
                 ]
             },
@@ -168,7 +179,7 @@ async def test_rbac_permissions(test_keys, dedicated_server):
         await client.connect(account_name="readonly")
 
         with pytest.raises(PermissionError) as excinfo:
-            await client.set_item_async("key", "value")
+            await client.set_item_async("key", "value", db="dedicated_server_db.sqlite")
         assert "forbidden" in str(excinfo.value).lower()
 
     finally:
@@ -178,16 +189,18 @@ async def test_rbac_permissions(test_keys, dedicated_server):
 @pytest.mark.asyncio
 async def test_realtime_policy_update(test_keys, dedicated_server):
     """即時反映: 実行中に権限を剥奪できることを確認"""
-    port, config_path, _ = dedicated_server
+    port, config_path, _, db_dir = dedicated_server
     priv, pub = test_keys
 
     accounts = {
+        "db_dir": db_dir,
         "accounts": [
             {
                 "name": "user",
                 "public_key": pub,
                 "allowed_methods": None,
                 "forbidden_methods": [],
+                "allowed_dbs": ["dedicated_server_db.sqlite"]
             }
         ]
     }
@@ -202,7 +215,7 @@ async def test_realtime_policy_update(test_keys, dedicated_server):
 
     try:
         await client.connect(account_name="user")
-        await client.list_tables()
+        await client.list_tables(db="dedicated_server_db.sqlite")
 
         accounts["accounts"][0]["forbidden_methods"] = ["list_tables"]
         with open(config_path, "w") as f:
@@ -212,7 +225,7 @@ async def test_realtime_policy_update(test_keys, dedicated_server):
         await asyncio.sleep(2.0)
 
         with pytest.raises(PermissionError):
-            await client.list_tables()
+            await client.list_tables(db="dedicated_server_db.sqlite")
 
     finally:
         await client.close()
@@ -221,7 +234,7 @@ async def test_realtime_policy_update(test_keys, dedicated_server):
 @pytest.mark.asyncio
 async def test_anti_dos_stream_limit(dedicated_server):
     """Anti-DoS: 未認証時の同時ストリーム数制限"""
-    port, _, _ = dedicated_server
+    port, _, _, _ = dedicated_server
     config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
 
     async with connect(
@@ -253,7 +266,7 @@ async def test_anti_dos_stream_limit(dedicated_server):
 @pytest.mark.asyncio
 async def test_anti_dos_total_buffer_limit(dedicated_server):
     """Anti-DoS: 未認証時の合計バッファ制限"""
-    port, _, _ = dedicated_server
+    port, _, _, _ = dedicated_server
     config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
 
     async with connect(

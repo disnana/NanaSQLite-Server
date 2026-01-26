@@ -172,7 +172,12 @@ class RemoteNanaSQLite(Base):
             if not self.connection:
                 await self.connect()
 
+            # db引数があればRPCメッセージのトップレベルに移す
+            db = kwargs.pop("db", None)
             request = {"method": name, "args": args, "kwargs": kwargs}
+            if db:
+                request["db"] = db
+
             response = await self.connection.call_rpc(request)
 
             if isinstance(response, dict) and response.get("status") == "error":
@@ -198,17 +203,17 @@ class RemoteNanaSQLite(Base):
         """同期版の__delitem__ - 実際の使用ではdel_item_asyncを使う"""
         raise NotImplementedError("Use 'await del_item_async()' instead")
 
-    async def set_item_async(self, key, value):
+    async def set_item_async(self, key, value, db=None):
         """非同期版のsetitem"""
-        return await self.__getattr__("__setitem__")(key, value)
+        return await self.__getattr__("__setitem__")(key, value, db=db)
 
-    async def get_item_async(self, key):
+    async def get_item_async(self, key, db=None):
         """非同期版のgetitem"""
-        return await self.__getattr__("__getitem__")(key)
+        return await self.__getattr__("__getitem__")(key, db=db)
 
-    async def del_item_async(self, key):
+    async def del_item_async(self, key, db=None):
         """非同期版のdelitem"""
-        return await self.__getattr__("__delitem__")(key)
+        return await self.__getattr__("__delitem__")(key, db=db)
 
     async def close(self):
         if self.connection:
