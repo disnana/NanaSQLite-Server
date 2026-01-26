@@ -5,12 +5,10 @@ import pytest
 import ssl
 from nanasqlite_server.client import RemoteNanaSQLite
 from nanasqlite_server.cert_gen import generate_certificate
-from nanasqlite_server.key_gen import generate_keys
 import subprocess
 import sys
 import signal
 import time
-import shutil
 
 @pytest.fixture
 def test_keys():
@@ -48,6 +46,8 @@ async def multi_db_server(tmp_path, test_keys):
 
     orig_cwd = os.getcwd()
     os.chdir(tmp_path)
+    # Start server process
+    proc = None
     try:
         generate_certificate()
         
@@ -68,8 +68,15 @@ async def multi_db_server(tmp_path, test_keys):
             "--accounts", str(config_path)
         ]
         
-        from aioquic.quic.configuration import QuicConfiguration
-        from aioquic.asyncio import connect
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            creationflags = 0
+
+        proc = subprocess.Popen(
+            cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            creationflags=creationflags
+        )
 
         # Wait for server
         start = time.time()

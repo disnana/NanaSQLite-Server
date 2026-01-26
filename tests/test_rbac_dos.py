@@ -64,6 +64,11 @@ async def dedicated_server(tmp_path):
         env["NANASQLITE_FORCE_POLLING"] = "1"
 
         db_path = tmp_path / "dedicated_server_db.sqlite"
+        
+        # Provide db_dir in config
+        with open(config_path, "w") as f:
+            json.dump({"db_dir": str(tmp_path), "accounts": []}, f)
+
         cmd = [
             sys.executable,
             "-m",
@@ -72,8 +77,11 @@ async def dedicated_server(tmp_path):
             str(port),
             "--accounts",
             str(config_path),
-            "--db",
-            str(db_path),
+            # --db argument is deprecated/legacy but still accepted by argparse, 
+            # effectively ignored by new logic if multi-DB is used correctly via accounts.
+            # We keep it to avoid changing server argument parsing logic if not necessary.
+            "--db", 
+            str(db_path), 
         ]
 
         # パイプ詰まりによるハングアップを防ぐため
@@ -146,12 +154,14 @@ async def test_rbac_permissions(test_keys, dedicated_server):
     with open(config_path, "w") as f:
         json.dump(
             {
+                "db_dir": str(tmp_path),
                 "accounts": [
                     {
                         "name": "readonly",
                         "public_key": pub,
                         "allowed_methods": None,
                         "forbidden_methods": ["__setitem__"],
+                        "allowed_dbs": ["dedicated_server_db.sqlite"]
                     }
                 ]
             },
@@ -182,12 +192,14 @@ async def test_realtime_policy_update(test_keys, dedicated_server):
     priv, pub = test_keys
 
     accounts = {
+        "db_dir": str(tmp_path),
         "accounts": [
             {
                 "name": "user",
                 "public_key": pub,
                 "allowed_methods": None,
                 "forbidden_methods": [],
+                "allowed_dbs": ["dedicated_server_db.sqlite"]
             }
         ]
     }
