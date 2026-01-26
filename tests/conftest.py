@@ -68,12 +68,38 @@ def ensure_test_server():
     env["PYTHONPATH"] = python_path
 
     db_path = "server_db_test.sqlite"
+    
+    # Create accounts.json with multi-DB support  
+    accounts_config = {
+        "db_dir": ".",
+        "accounts": []
+    }
+    
+    # Add default account if public key exists
+    if os.path.exists(PUBLIC_KEY_PATH):
+        with open(PUBLIC_KEY_PATH, "rb") as f:
+            pub_key = f.read().decode().strip()
+        accounts_config["accounts"].append({
+            "name": "default_admin",
+            "public_key": pub_key,
+            "allowed_methods": None,
+            "forbidden_methods": [],
+            "allowed_dbs": ["server_db_test.sqlite"]
+        })
+    
+    accounts_path = "test_accounts.json"
+    with open(accounts_path, "w") as f:
+        import json
+        json.dump(accounts_config, f)
+    
     cmd = [
         sys.executable,
         "-m",
         "nanasqlite_server.server",
         "--port",
         str(port),
+        "--accounts",
+        accounts_path,
         "--db",
         db_path,
     ]

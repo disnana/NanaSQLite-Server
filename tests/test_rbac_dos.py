@@ -63,11 +63,12 @@ async def dedicated_server(tmp_path):
         env["PYTHONUNBUFFERED"] = "1"
         env["NANASQLITE_FORCE_POLLING"] = "1"
 
+        db_dir = str(tmp_path)
         db_path = tmp_path / "dedicated_server_db.sqlite"
         
         # Provide db_dir in config
         with open(config_path, "w") as f:
-            json.dump({"db_dir": str(tmp_path), "accounts": []}, f)
+            json.dump({"db_dir": db_dir, "accounts": []}, f)
 
         cmd = [
             sys.executable,
@@ -124,7 +125,7 @@ async def dedicated_server(tmp_path):
                     "Dedicated server failed to start (QUIC check failed)"
                 )
 
-        yield port, config_path, priv_key_path
+        yield port, config_path, priv_key_path, db_dir
 
     finally:
         if proc.poll() is None:
@@ -148,13 +149,13 @@ async def dedicated_server(tmp_path):
 @pytest.mark.asyncio
 async def test_rbac_permissions(test_keys, dedicated_server):
     """RBAC: アカウントごとの権限制限が機能することを確認"""
-    port, config_path, _ = dedicated_server
+    port, config_path, _, db_dir = dedicated_server
     priv, pub = test_keys
 
     with open(config_path, "w") as f:
         json.dump(
             {
-                "db_dir": str(tmp_path),
+                "db_dir": db_dir,
                 "accounts": [
                     {
                         "name": "readonly",
@@ -188,11 +189,11 @@ async def test_rbac_permissions(test_keys, dedicated_server):
 @pytest.mark.asyncio
 async def test_realtime_policy_update(test_keys, dedicated_server):
     """即時反映: 実行中に権限を剥奪できることを確認"""
-    port, config_path, _ = dedicated_server
+    port, config_path, _, db_dir = dedicated_server
     priv, pub = test_keys
 
     accounts = {
-        "db_dir": str(tmp_path),
+        "db_dir": db_dir,
         "accounts": [
             {
                 "name": "user",

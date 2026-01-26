@@ -7,7 +7,6 @@ from nanasqlite_server.client import RemoteNanaSQLite
 from nanasqlite_server.cert_gen import generate_certificate
 import subprocess
 import sys
-import signal
 import time
 
 @pytest.fixture
