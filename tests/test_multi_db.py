@@ -153,8 +153,8 @@ async def test_multi_db_access(multi_db_server):
         # Traversal attempt
         with pytest.raises(Exception) as exc:
             await client.__getattr__("__getitem__")("key", db="../config.json")
-        # Depending on error message from server
-        assert "detected" in str(exc.value).lower() or "invalid" in str(exc.value).lower()
+        # Server returns "not allowed" for unauthorized database access
+        assert "not allowed" in str(exc.value).lower()
 
     finally:
         await client.close()
