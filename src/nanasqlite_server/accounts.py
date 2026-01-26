@@ -16,7 +16,12 @@ except ImportError:
 
 class Account:
     def __init__(
-        self, name, public_key_pem, allowed_methods=None, forbidden_methods=None
+        self,
+        name,
+        public_key_pem,
+        allowed_methods=None,
+        forbidden_methods=None,
+        allowed_dbs=None,
     ):
         self.name = name
         self.public_key_pem = public_key_pem
@@ -25,6 +30,9 @@ class Account:
         )
         self.forbidden_methods = (
             set(forbidden_methods) if forbidden_methods is not None else None
+        )
+        self.allowed_dbs = (
+            set(allowed_dbs) if allowed_dbs is not None else None
         )
 
         # 公開鍵オブジェクトを事前にロード
@@ -48,6 +56,7 @@ class AccountManager:
         self._stop_event = asyncio.Event()
         self._load_throttle_interval = 1.0
         self._last_checked = 0
+        self.db_dir = "."
 
         # 初回読み込み
         self._do_load()
@@ -66,6 +75,7 @@ class AccountManager:
             with open(self.config_path, "r") as f:
                 data = json.load(f)
 
+            self.db_dir = data.get("db_dir", ".")
             new_accounts = []
             for acc_data in data.get("accounts", []):
                 new_accounts.append(
@@ -74,6 +84,7 @@ class AccountManager:
                         acc_data["public_key"],
                         acc_data.get("allowed_methods"),
                         acc_data.get("forbidden_methods"),
+                        acc_data.get("allowed_dbs"),
                     )
                 )
 

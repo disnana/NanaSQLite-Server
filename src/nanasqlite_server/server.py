@@ -125,17 +125,48 @@ def record_failed_attempt(ip):
     return False
 
 
-# 共有DBインスタンス (bulk_load=True でメモリに全データをロード)
-_db_path = "server_db.sqlite"
-_shared_db = None
+# 共有DBインスタンス管理
+_db_instances: dict[str, NanaSQLite] = {}
+_db_instances_lock = asyncio.Lock()
 
 
-def get_shared_db():
-    """共有DBインスタンスを取得 (遅延初期化)"""
-    global _shared_db
-    if _shared_db is None:
-        _shared_db = NanaSQLite(_db_path, bulk_load=True)
-    return _shared_db
+async def get_db_instance(db_path, bulk_load=True):
+    """DBインスタンスを取得（遅延初期化、スレッドセーフ）"""
+    async with _db_instances_lock:
+        if db_path not in _db_instances:
+            # スレッドプールで初期化（IOが発生するため）
+            loop = asyncio.get_running_loop()
+            logging.info(f"Initializing new database instance: {db_path}")
+            _db_instances[db_path] = await loop.run_in_executor(
+                get_executor(), lambda: NanaSQLite(db_path, bulk_load=bulk_load)
+            )
+        return _db_instances[db_path]
+
+
+def validate_db_path(base_dir, db_name):
+    """
+    DBパスを検証し、ベースディレクトリ配下にあることを保証する。
+    ディレクトリトラバーサル攻撃を防ぐ。
+    """
+    if not db_name:
+        return None
+
+    # 正規化
+    safe_name = os.path.normpath(db_name)
+
+    # 絶対パスや '..' を含むパスの拒否（追加の安全策）
+    if os.isabs(safe_name) or ".." in safe_name.split(os.sep):
+        raise PermissionError(f"Invalid characters in DB name: {db_name}")
+
+    # パス結合
+    full_path = os.path.abspath(os.path.join(base_dir, safe_name))
+    base_abs = os.path.abspath(base_dir)
+
+    # ベースディレクトリ配下であることを確認
+    if not full_path.startswith(base_abs):
+        raise PermissionError(f"DB path traversal detected: {db_name}")
+
+    return full_path
 
 
 class NanaRpcProtocol(QuicConnectionProtocol):
@@ -159,6 +190,8 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         # グローバルなデフォルト制限 (アカウント個別の設定がない場合に使用)
         self.default_allowed_methods = allowed_methods
         self.default_forbidden_methods = forbidden_methods
+        # マルチDB用: セッション中最後に使ったDBを記録（デフォルト用）
+        self.last_db_name = None
         # Store task references to prevent premature GC in Python 3.13+
         self._background_tasks = set()
 
@@ -187,7 +220,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             logging.debug("Failed to resolve client IP from transport.", exc_info=True)
 
         self.client_ip = addr or "unknown"
-        print(f"New connection from: {self.client_ip}", flush=True)
+        logging.info(f"New connection from: {self.client_ip}")
 
     def connection_lost(self, exc):
         """Clean up background tasks when connection is lost
@@ -200,7 +233,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
     def quic_event_received(self, event):
         if is_banned(self.client_ip):
-            print(f"Blocked connection from banned IP: {self.client_ip}")
+            logging.warning(f"Blocked connection from banned IP: {self.client_ip}")
             self.close()
             return
 
@@ -210,7 +243,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 not self.authenticated
                 and len(self.stream_buffers) >= MAX_CONCURRENT_STREAMS
             ):
-                print(
+                logging.warning(
                     f"Too many concurrent streams for unauthenticated connection: {self.client_ip}"
                 )
                 self._quic.reset_stream(event.stream_id, 0)
@@ -219,7 +252,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             # 合計バッファサイズ制限
             new_data_len = len(event.data)
             if self.total_buffer_size + new_data_len > MAX_TOTAL_BUFFER_SIZE:
-                print(f"Total buffer overflow for connection from: {self.client_ip}")
+                logging.warning(f"Total buffer overflow for connection from: {self.client_ip}")
                 self.close()
                 return
 
@@ -228,7 +261,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 len(self.stream_buffers[event.stream_id]) + new_data_len
                 > MAX_STREAM_BUFFER_SIZE
             ):
-                print(f"Stream buffer overflow for stream {event.stream_id}")
+                logging.warning(f"Stream buffer overflow for stream {event.stream_id}")
                 # このストリームの分を合計から引く
                 self.total_buffer_size -= len(self.stream_buffers[event.stream_id])
                 self.stream_buffers.pop(event.stream_id)
@@ -289,16 +322,19 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                     if account:
                         self.authenticated = True
                         self.account = account
-                        self.db = get_shared_db()  # 共有DBを使用
+                        # 認証時にデフォルトDBを設定（あれば）
+                        if account.allowed_dbs:
+                            self.last_db_name = sorted(list(account.allowed_dbs))[0]
+                        
                         if self.client_ip in failed_attempts:
                             del failed_attempts[self.client_ip]
                         response = "AUTH_OK"
-                        print(
+                        logging.info(
                             f"Authentication successful for {self.client_ip} (Account: {account.name})"
                         )
                     else:
                         is_now_banned = record_failed_attempt(self.client_ip)
-                        print(
+                        logging.warning(
                             f"Auth failed for {self.client_ip}. Attempt: {failed_attempts.get(self.client_ip, 0)}"
                         )
 
@@ -370,8 +406,9 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         method_name = str(message.get("method"))
         args = message.get("args", [])
         kwargs = message.get("kwargs", {})
+        db_name = message.get("db")  # 要求されたDB名
 
-        # 動的な権限剥奪の反映: watchfilesがバックグラウンドで最新に保っている
+        # 動的な権限剥奪の反映
         current_account = next(
             (a for a in self.account_manager.accounts if a.name == self.account.name),
             None,
@@ -379,30 +416,37 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         if not current_account:
             raise PermissionError(f"Account '{self.account.name}' has been disabled")
 
-        # 権限情報を最新に更新
+        # 1. DBの決定と検証
+        target_db_name = db_name or self.last_db_name
+        if not target_db_name:
+            raise ValueError("No database specified and no default available")
+
+        # アカウントごとの許可リストをチェック
+        if current_account.allowed_dbs is not None:
+            if target_db_name not in current_account.allowed_dbs:
+                raise PermissionError(
+                    f"Access to database '{target_db_name}' is not allowed for account '{current_account.name}'"
+                )
+
+        # パスの安全性を検証し、絶対パスを取得
+        full_db_path = validate_db_path(self.account_manager.db_dir, target_db_name)
+        self.last_db_name = target_db_name  # 最後に成功したDBを記憶
+
+        # 2. メソッド実行権限の更新・確認
         allowed_methods = current_account.allowed_methods
         forbidden_methods = current_account.forbidden_methods
 
-        # 動的保護:
-        # 1. カスタム許可リストがあれば優先的にチェック
-        # 2. カスタム禁止リストがあればチェック
-        # 3. デフォルトの動的保護メカニズム
-
-        # 優先順位 1: カスタム許可リスト (ホワイトリスト)
-        # allowed_methods が指定されている場合、そこにないメソッドは全て拒否する
         if allowed_methods is not None:
             if method_name not in allowed_methods:
                 raise PermissionError(
                     f"Method '{method_name}' is not in the allowed list for account '{current_account.name}'"
                 )
         else:
-            # 優先順位 2: カスタム禁止リスト (ブラックリスト)
             if forbidden_methods and method_name in forbidden_methods:
                 raise PermissionError(
                     f"Method '{method_name}' is forbidden for account '{current_account.name}'"
                 )
 
-            # 優先順位 3: デフォルトの安全制限 (ブラックリストがない、またはリストに含まれない場合)
             is_special = method_name.startswith("__") and method_name.endswith("__")
             allowed_special = {
                 "__getitem__",
@@ -411,8 +455,6 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 "__contains__",
                 "__len__",
             }
-
-            # 安全性のための厳格なチェック
             is_nana_method = method_name in dir(NanaSQLite)
 
             if (
@@ -423,22 +465,23 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             ):
                 raise PermissionError(f"Method '{method_name}' is forbidden or invalid")
 
-        if hasattr(self.db, method_name):
-            method = getattr(self.db, method_name)
+        # 3. DBインスタンスの取得と実行
+        db_instance = await get_db_instance(full_db_path)
 
-            # 全てのDB操作をexecutorで実行 (OSを問わずイベントループをブロッキングから守る)
+        if hasattr(db_instance, method_name):
+            method = getattr(db_instance, method_name)
+
             loop = asyncio.get_running_loop()
             try:
-                # DB操作にタイムアウトを設定 (デッドロックや長時間ロックの対策)
                 result = await asyncio.wait_for(
                     loop.run_in_executor(
                         get_executor(), functools.partial(method, *args, **kwargs)
                     ),
-                    timeout=15.0,  # 十分に長いが無限ではない
+                    timeout=15.0,
                 )
                 return {"status": "success", "result": result}
             except asyncio.TimeoutError:
-                logging.error(f"Database operation timeout: {method_name}")
+                logging.error(f"Database operation timeout: {method_name} on {target_db_name}")
                 raise RuntimeError("Database operation timed out")
         else:
             raise AttributeError(f"NanaSQLite object has no attribute '{method_name}'")
@@ -518,9 +561,9 @@ async def main(
     # AccountManagerの初期化
     account_manager = AccountManager(account_config, default_public_key)
 
-    print(f"NanaSQLite QUIC Server starting on 127.0.0.1:{port}")
-    print("Auth mode: Ed25519 Passkey (Challenge-Response)")
-    print("Security: All DB operations run in executor (non-blocking)")
+    logging.info(f"NanaSQLite QUIC Server starting on 127.0.0.1:{port}")
+    logging.info("Auth mode: Ed25519 Passkey (Challenge-Response)")
+    logging.info("Security: All DB operations run in executor (non-blocking)")
 
     # アカウント情報の監視を開始
     account_manager.start_watching()
