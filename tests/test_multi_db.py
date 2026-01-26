@@ -79,6 +79,9 @@ async def multi_db_server(tmp_path, test_keys):
         )
 
         # Wait for server
+        from aioquic.quic.configuration import QuicConfiguration
+        from aioquic.asyncio import connect
+        
         start = time.time()
         ready = False
         config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
@@ -88,11 +91,10 @@ async def multi_db_server(tmp_path, test_keys):
                 break
             try:
                 # Use a shorter timeout for each connection attempt
-                async with asyncio.timeout(1.0):
-                    async with connect("127.0.0.1", port, configuration=config):
-                        ready = True
-                        break
-            except:
+                async with asyncio.wait_for(connect("127.0.0.1", port, configuration=config), timeout=1.0):
+                    ready = True
+                    break
+            except Exception:
                 await asyncio.sleep(0.5)
         
         if not ready:
@@ -101,8 +103,9 @@ async def multi_db_server(tmp_path, test_keys):
             
         yield port, priv, db_dir
     finally:
-        proc.terminate()
-        proc.wait()
+        if proc and proc.poll() is None:
+            proc.terminate()
+            proc.wait()
         os.chdir(orig_cwd)
 
 @pytest.mark.asyncio

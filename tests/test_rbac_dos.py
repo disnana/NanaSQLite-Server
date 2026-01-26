@@ -178,7 +178,7 @@ async def test_rbac_permissions(test_keys, dedicated_server):
         await client.connect(account_name="readonly")
 
         with pytest.raises(PermissionError) as excinfo:
-            await client.set_item_async("key", "value")
+            await client.set_item_async("key", "value", db="dedicated_server_db.sqlite")
         assert "forbidden" in str(excinfo.value).lower()
 
     finally:
@@ -214,7 +214,7 @@ async def test_realtime_policy_update(test_keys, dedicated_server):
 
     try:
         await client.connect(account_name="user")
-        await client.list_tables()
+        await client.list_tables(db="dedicated_server_db.sqlite")
 
         accounts["accounts"][0]["forbidden_methods"] = ["list_tables"]
         with open(config_path, "w") as f:
@@ -224,7 +224,7 @@ async def test_realtime_policy_update(test_keys, dedicated_server):
         await asyncio.sleep(2.0)
 
         with pytest.raises(PermissionError):
-            await client.list_tables()
+            await client.list_tables(db="dedicated_server_db.sqlite")
 
     finally:
         await client.close()
