@@ -4,7 +4,8 @@
             "name": "example_user",
             "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKcPbivDI5kKI1CqMqyp13QKhc6ZyezW07drjfRzI8SS",
             "allowed_methods": null,
-            "forbidden_methods": []
+            "forbidden_methods": [],
+            "allowed_dbs": ["example.sqlite"]
         }
     ]
 }

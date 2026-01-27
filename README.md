@@ -150,14 +150,25 @@ import asyncio
 from nanasqlite_server.client import RemoteNanaSQLite
 
 async def main():
+    # 接続情報の指定
     db = RemoteNanaSQLite(host="127.0.0.1", port=4433)
+    
+    # 接続と認証（秘密鍵 nana_private.pem が必要）
     await db.connect()
+    
+    # 非同期メソッドによるデータ操作
     await db.set_item_async("key", "value")
-    print(await db.get_item_async("key"))
+    val = await db.get_item_async("key")
+    print(f"Read back: {val}")
+    
+    # 終了
     await db.close()
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
+
+*注: サーバー側で DB が指定されていない場合、またはアカウントの `allowed_dbs` が設定されていない場合、サーバー起動時に `--db` で指定されたデータベースがデフォルトとして使用されます。*
 
 ## License
 MIT License

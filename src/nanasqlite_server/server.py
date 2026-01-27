@@ -325,6 +325,10 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                         # 認証時にデフォルトDBを設定（あれば）
                         if account.allowed_dbs:
                             self.last_db_name = sorted(list(account.allowed_dbs))[0]
+                        else:
+                            # アカウントごとの制限がない場合は、サーバー全体のデフォルトDBを使用
+                            global _db_path
+                            self.last_db_name = os.path.basename(_db_path)
                         
                         if self.client_ip in failed_attempts:
                             del failed_attempts[self.client_ip]
