@@ -16,11 +16,12 @@ The security of this server depends on the method structure of the `NanaSQLite` 
 ### Features
 - **QUIC Protocol**: Built on top of HTTP/3 technology for low latency and high reliability.
 - **Ed25519 Passkey Authentication**: Secure challenge-response authentication.
+- **Performance**: Optimized with `ormsgpack` for ultra-fast message serialization.
+- **Concurrency & Safety**: Thread-safe operations using `RLock` and optimized with `WAL` mode.
+- **Reliability**: Enhanced task management for Python 3.13+ compatibility.
 - **Role-Based Access Control (RBAC)**: Manage allowed/forbidden methods per account.
 - **Multi-DB Support**: Securely access multiple databases within a designated directory.
-- **Dynamic Protection**: Automatically adapts to updates while strictly controlling method access.
-- **Cross-Platform**: Optimized for Windows, Linux, and macOS.
-- **Non-Blocking IO**: Database operations run in a thread pool.
+- **Cross-Platform**: Fully optimized for Windows, Linux, and macOS.
 
 ### Quick Start
 ```bash
@@ -54,23 +55,36 @@ Configure accounts and database access in `accounts.json`:
 ```
 *Note: `db_dir` is the base directory. Remote clients can only access databases explicitly listed in their `allowed_dbs`.*
 
-### Customizing Allowed Methods
-You can customize the allowed/forbidden methods when starting the server programmatically:
-
+### Client Usage Example
 ```python
 import asyncio
-from nanasqlite_server.server import main
+from nanasqlite_server.client import RemoteNanaSQLite
 
-async def start_server():
-    # Explicitly allow 'close' and forbid '__setitem__'
-    await main(
-        allowed_methods={"close"},
-        forbidden_methods={"__setitem__"}
-    )
+async def main():
+    # Specify connection info
+    db = RemoteNanaSQLite(host="127.0.0.1", port=4433)
+    
+    # Connect and authenticate (requires nana_private.pem)
+    await db.connect()
+    
+    # Perform data operations (async methods)
+    await db.set_item_async("key", "value")
+    val = await db.get_item_async("key")
+    print(f"Read back: {val}")
+    
+    # Close connection
+    await db.close()
 
 if __name__ == "__main__":
-    asyncio.run(start_server())
+    asyncio.run(main())
 ```
+*Note: If no database is specified by the client and the account has no `allowed_dbs` restriction, the database specified by the server's `--db` option (default: `server_db.sqlite`) will be used.*
+
+### Concurrency & Locking Design
+NanaSQLite-Server uses a high-concurrency model optimized for safety:
+- **Threadpool Offloading**: All database operations are offloaded to a shared thread pool (default 10 workers) to prevent blocking the async event loop.
+- **Per-DB Locking**: Each database instance is protected by a thread-safe `RLock`. Multiple readers/writers are safely queued.
+- **WAL Mode**: Databases are initialized in `WAL` (Write-Ahead Logging) mode, allowing concurrent reads even during write operations.
 
 ---
 
