@@ -246,6 +246,7 @@ class TestBlocking:
 
         start_total = time.perf_counter()
         # pytestのハングを防ぐため、gather自体にもタイムアウトを設定
+        results = []
         try:
             results = await asyncio.wait_for(
                 asyncio.gather(
@@ -259,6 +260,11 @@ class TestBlocking:
         except asyncio.TimeoutError:
             pytest.fail(
                 "test_concurrent_writes timed out (possible deadlock or server hang)"
+            )
+        except Exception as exc:
+            pytest.fail(
+                f"test_concurrent_writes failed with unexpected exception: "
+                f"{type(exc).__name__}: {exc}"
             )
 
         total_elapsed = time.perf_counter() - start_total
