@@ -164,7 +164,7 @@ jobs:
         pytest tests/ -v --tb=short --junitxml=test-results.xml
 
     - name: Upload test results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: test-results-${{ matrix.os }}-py${{ matrix.python-version }}
@@ -345,7 +345,7 @@ jobs:
       run: python -m build
     
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: dist
         path: dist/
