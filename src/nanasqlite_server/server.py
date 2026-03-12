@@ -75,6 +75,22 @@ FORBIDDEN_METHODS = {
     "set_model",
     "load_all",
     "refresh",
+    # --- v1.4.0 新規追加: セキュリティ上危険なメソッド ---
+    # backup/restore: クライアントから任意のファイルパスを指定できるため
+    # ディレクトリトラバーサルや任意ファイル読み書きの脆弱性になる
+    "backup",
+    "restore",
+    # fetch_all/fetch_one: 内部でexecute()を呼び出す生SQL実行メソッド
+    # executeが既に禁止されているため、これらも禁止する
+    "fetch_all",
+    "fetch_one",
+    # DDL操作: テーブル・インデックスの破壊的な変更を防ぐ
+    "create_table",
+    "alter_table_add_column",
+    "drop_table",
+    "drop_index",
+    # create_index: 巨大インデックスの作成によるDoSや意図しないスキーマ変更を防ぐ
+    "create_index",
 }
 
 # ホワイトリスト形式ではなく、全DB操作をexecutorで実行するように変更するため
@@ -129,6 +145,9 @@ def record_failed_attempt(ip):
 _db_instances: dict[str, NanaSQLite] = {}
 _db_instances_lock = asyncio.Lock()
 
+# v2エンジン設定 (main()で設定される)
+_db_config: dict = {}
+
 
 async def get_db_instance(db_path, bulk_load=True):
     """DBインスタンスを取得（遅延初期化、スレッドセーフ）"""
@@ -137,8 +156,11 @@ async def get_db_instance(db_path, bulk_load=True):
             # スレッドプールで初期化（IOが発生するため）
             loop = asyncio.get_running_loop()
             logging.info(f"Initializing new database instance: {db_path}")
+            # _db_configからv2エンジン設定などを反映する
+            init_kwargs = {"bulk_load": bulk_load}
+            init_kwargs.update(_db_config)
             _db_instances[db_path] = await loop.run_in_executor(
-                get_executor(), lambda: NanaSQLite(db_path, bulk_load=bulk_load)
+                get_executor(), lambda: NanaSQLite(db_path, **init_kwargs)
             )
         return _db_instances[db_path]
 
@@ -512,12 +534,55 @@ def main_sync():
         default="server_db.sqlite",
         help="Path to SQLite database file",
     )
+    # v2エンジン設定
+    parser.add_argument(
+        "--v2",
+        action="store_true",
+        default=False,
+        help="Enable NanaSQLite v2 engine (background async writes)",
+    )
+    parser.add_argument(
+        "--flush-mode",
+        type=str,
+        default="immediate",
+        choices=["immediate", "count", "time", "manual"],
+        help="v2 flush mode (default: immediate)",
+    )
+    parser.add_argument(
+        "--flush-interval",
+        type=float,
+        default=3.0,
+        help="v2 flush interval in seconds for 'time' mode (default: 3.0)",
+    )
+    parser.add_argument(
+        "--flush-count",
+        type=int,
+        default=100,
+        help="v2 write count threshold for 'count' mode (default: 100)",
+    )
+    parser.add_argument(
+        "--v2-chunk-size",
+        type=int,
+        default=1000,
+        help="v2 maximum writes per flush transaction (default: 1000)",
+    )
     args = parser.parse_args()
 
     # Python 3.13+ では、シグナルハンドラの登録タイミングが重要な場合があるため
     # asyncio.run() に全て任せる
     try:
-        asyncio.run(main(port=args.port, account_config=args.accounts, db_path=args.db))
+        asyncio.run(
+            main(
+                port=args.port,
+                account_config=args.accounts,
+                db_path=args.db,
+                v2_mode=args.v2,
+                flush_mode=args.flush_mode,
+                flush_interval=args.flush_interval,
+                flush_count=args.flush_count,
+                v2_chunk_size=args.v2_chunk_size,
+            )
+        )
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
 
@@ -528,9 +593,27 @@ async def main(
     port=4433,
     account_config="accounts.json",
     db_path="server_db.sqlite",
+    v2_mode=False,
+    flush_mode="immediate",
+    flush_interval=3.0,
+    flush_count=100,
+    v2_chunk_size=1000,
 ):
-    global _executor, _server, _db_path
+    global _executor, _server, _db_path, _db_config
     _db_path = db_path
+
+    # v2エンジン設定をグローバルに保存 (get_db_instanceで参照される)
+    _db_config = {}
+    if v2_mode:
+        _db_config["v2_mode"] = True
+        _db_config["flush_mode"] = flush_mode
+        _db_config["flush_interval"] = flush_interval
+        _db_config["flush_count"] = flush_count
+        _db_config["v2_chunk_size"] = v2_chunk_size
+        logging.info(
+            f"v2 engine enabled: flush_mode={flush_mode}, flush_interval={flush_interval}, "
+            f"flush_count={flush_count}, v2_chunk_size={v2_chunk_size}"
+        )
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -622,25 +705,4 @@ async def main(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="NanaSQLite QUIC Server")
-    parser.add_argument("--port", type=int, default=4433, help="Port to listen on")
-    parser.add_argument(
-        "--accounts",
-        type=str,
-        default="accounts.json",
-        help="Path to accounts configuration file",
-    )
-    parser.add_argument(
-        "--db",
-        type=str,
-        default="server_db.sqlite",
-        help="Path to SQLite database file",
-    )
-    args = parser.parse_args()
-
-    logging.basicConfig(level=logging.INFO)
-    try:
-        asyncio.run(main(port=args.port, account_config=args.accounts, db_path=args.db))
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        # Intentional ignore of KeyboardInterrupt to avoid crash log
-        logging.info("Server interrupted by user (KeyboardInterrupt). Shutting down.")
+    main_sync()
