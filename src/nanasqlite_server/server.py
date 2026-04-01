@@ -18,7 +18,7 @@ from .accounts import AccountManager
 import argparse
 import os
 
-# AsyncNanaSQLite サポート (nanasqlite v1.5.0dev2 以降)
+# AsyncNanaSQLite サポート (nanasqlite v1.5.0dev1 以降で利用可能)
 try:
     from nanasqlite import AsyncNanaSQLite
     HAS_ASYNC_NANASQLITE = True
@@ -106,7 +106,7 @@ FORBIDDEN_METHODS = {
     "add_hook",
 }
 
-# AsyncNanaSQLite の特殊メソッドマッピング (v1.5.0dev2 Asyncモード用)
+# AsyncNanaSQLite の特殊メソッドマッピング (--async-mode 用)
 # NanaSQLite の __dunder__ メソッドを AsyncNanaSQLite の対応する非同期メソッドに変換する
 ASYNC_SPECIAL_METHOD_MAP: dict[str, str] = {
     "__getitem__": "aget",
@@ -619,12 +619,12 @@ def main_sync():
         default=False,
         help="Enable v2 engine metrics collection (v1.5.0+, requires --v2)",
     )
-    # Asyncモード設定 (nanasqlite v1.5.0dev2 以降)
+    # Asyncモード設定
     parser.add_argument(
         "--async-mode",
         action="store_true",
         default=False,
-        help="Use AsyncNanaSQLite for non-blocking database operations (requires nanasqlite v1.5.0dev2+)",
+        help="Use AsyncNanaSQLite for non-blocking database operations (recommended: nanasqlite v1.5.0dev1+; see docs/async-mode.md)",
     )
     args = parser.parse_args()
 
@@ -681,11 +681,14 @@ async def main(
             f"enable_metrics={v2_enable_metrics}"
         )
 
-    # Asyncモード設定 (nanasqlite v1.5.0dev2 以降)
+    # Asyncモード設定
     if async_mode:
         if not HAS_ASYNC_NANASQLITE:
             raise RuntimeError(
-                "AsyncNanaSQLite is not available. Please upgrade to nanasqlite v1.5.0dev2 or later."
+                "--async-mode requires AsyncNanaSQLite, which is not available in the "
+                "currently installed version of nanasqlite. "
+                "Recommended: nanasqlite v1.5.0dev1 or later. "
+                "See docs/async-mode.md for details."
             )
         _db_config["async_mode"] = True
         logging.info("Async mode enabled: using AsyncNanaSQLite")
