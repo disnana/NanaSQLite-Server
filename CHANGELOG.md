@@ -1,5 +1,44 @@
 # 更新履歴 (CHANGELOG)
 
+## [1.2.1] - 2026-04-01
+
+### nanasqlite v1.5.0dev2 対応 & バグ修正
+
+#### セキュリティ修正 (Security Fixes)
+- **`add_hook` のブロック**: nanasqlite v1.5.0dev2 で追加された `add_hook()` を `FORBIDDEN_METHODS` に追加。任意の Python オブジェクト（フック）をサーバー側 DB インスタンスに注入できるため、RPC 経由では安全に検証できず、サーバー上で任意コードが実行される可能性がある。
+
+#### 新機能 (New Features)
+- **v1.5.0dev2 新メソッドのサポート**:
+  - `clear_dlq()`: v2 DLQ のクリア（安全なv2管理メソッドとして許可）。
+  - `get_v2_metrics()`: v2エンジンのメトリクス取得（安全な読み取り専用メソッドとして許可）。
+- **`--enable-metrics` フラグ**: `--v2` と組み合わせてv2メトリクス収集を有効化（`get_v2_metrics()` が実際のデータを返すようになる）。
+- **後方互換**: v1.5.0dev2 では `NanaSQLite` コンストラクタのv2パラメータが `**kwargs` 経由でも受け付けられるため、v1.4.0 との完全な互換性を維持。
+
+#### バグ修正 (Bug Fixes)
+- **ruff F841**: `tests/test_v14_compatibility.py` の `test_upsert` における未使用変数 `result` を削除。
+
+
+
+### nanasqlite v1.4.0 対応 & v2エンジンサポート
+
+#### セキュリティ修正 (Security Fixes)
+- **新規危険メソッドのブロック**: nanasqlite v1.4.0 で追加された以下のメソッドを `FORBIDDEN_METHODS` に追加し、リモートから悪用されるのを防止:
+  - `backup` / `restore`: クライアントから任意のファイルパスを指定できるため、**ディレクトリトラバーサル・任意ファイル読み書きの脆弱性**となる。
+  - `fetch_all` / `fetch_one`: 内部で `execute()` を呼び出す生SQL実行メソッド。既存の `execute` 禁止と同様の理由で禁止。
+  - `create_table` / `alter_table_add_column` / `drop_table`: 任意DDL操作によるスキーマ破壊を防止。
+  - `drop_index` / `create_index`: 破壊的なインデックス操作・DoSを防止。
+
+#### 新機能 (New Features)
+- **v2エンジンサポート**: nanasqlite v1.4.0 の新アーキテクチャ（バックグラウンド非同期書き込み）に対応。
+  - `--v2` フラグでv2エンジンを有効化。
+  - `--flush-mode` (immediate/count/time/manual): フラッシュ戦略の設定。
+  - `--flush-interval`: timeモード時のフラッシュ間隔（秒）。
+  - `--flush-count`: countモード時の書き込み閾値。
+  - `--v2-chunk-size`: フラッシュ時のトランザクション最大件数。
+  - v2モードでは `flush()`, `get_dlq()`, `retry_dlq()` をRPC経由で呼び出し可能。
+- **v1.4.0 新メソッドの全面サポート**: `batch_get`, `batch_delete`, `batch_update`, `batch_update_partial`, `upsert`, `count`, `exists`, `get_db_size`, `query_with_pagination`, `table_exists`, `export_table_to_dict`, `import_from_dict_list`, `to_dict`, `get_fresh`, `in_transaction`, `get_last_insert_rowid`, `is_cached`, `list_indexes`, `get_table_schema`, `flush`, `get_dlq`, `retry_dlq` がRPC経由で利用可能。
+- **`__main__` ブロックの整理**: `if __name__ == "__main__"` ブロックを `main_sync()` に統一し、二重実装を解消。
+
 ## [1.1.1] - 2026-01-27
 
 ### 改善
