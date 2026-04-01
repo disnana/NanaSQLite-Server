@@ -91,6 +91,10 @@ FORBIDDEN_METHODS = {
     "drop_index",
     # create_index: 巨大インデックスの作成によるDoSや意図しないスキーマ変更を防ぐ
     "create_index",
+    # --- v1.5.0 新規追加: セキュリティ上危険なメソッド ---
+    # add_hook: 任意のPythonオブジェクト（フック）を注入できるため
+    # RPC経由では安全に検証できず、サーバー側で任意のコードが実行される可能性がある
+    "add_hook",
 }
 
 # ホワイトリスト形式ではなく、全DB操作をexecutorで実行するように変更するため
@@ -566,6 +570,12 @@ def main_sync():
         default=1000,
         help="v2 maximum writes per flush transaction (default: 1000)",
     )
+    parser.add_argument(
+        "--enable-metrics",
+        action="store_true",
+        default=False,
+        help="Enable v2 engine metrics collection (v1.5.0+, requires --v2)",
+    )
     args = parser.parse_args()
 
     # Python 3.13+ では、シグナルハンドラの登録タイミングが重要な場合があるため
@@ -581,6 +591,7 @@ def main_sync():
                 flush_interval=args.flush_interval,
                 flush_count=args.flush_count,
                 v2_chunk_size=args.v2_chunk_size,
+                v2_enable_metrics=args.enable_metrics,
             )
         )
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -598,6 +609,7 @@ async def main(
     flush_interval=3.0,
     flush_count=100,
     v2_chunk_size=1000,
+    v2_enable_metrics=False,
 ):
     global _executor, _server, _db_path, _db_config
     _db_path = db_path
@@ -610,9 +622,11 @@ async def main(
         _db_config["flush_interval"] = flush_interval
         _db_config["flush_count"] = flush_count
         _db_config["v2_chunk_size"] = v2_chunk_size
+        _db_config["v2_enable_metrics"] = v2_enable_metrics
         logging.info(
             f"v2 engine enabled: flush_mode={flush_mode}, flush_interval={flush_interval}, "
-            f"flush_count={flush_count}, v2_chunk_size={v2_chunk_size}"
+            f"flush_count={flush_count}, v2_chunk_size={v2_chunk_size}, "
+            f"enable_metrics={v2_enable_metrics}"
         )
 
     stop_event = asyncio.Event()

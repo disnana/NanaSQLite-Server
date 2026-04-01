@@ -1,6 +1,23 @@
 # 更新履歴 (CHANGELOG)
 
-## [1.2.0] - 2026-03-12
+## [1.2.1] - 2026-04-01
+
+### nanasqlite v1.5.0dev2 対応 & バグ修正
+
+#### セキュリティ修正 (Security Fixes)
+- **`add_hook` のブロック**: nanasqlite v1.5.0dev2 で追加された `add_hook()` を `FORBIDDEN_METHODS` に追加。任意の Python オブジェクト（フック）をサーバー側 DB インスタンスに注入できるため、RPC 経由では安全に検証できず、サーバー上で任意コードが実行される可能性がある。
+
+#### 新機能 (New Features)
+- **v1.5.0dev2 新メソッドのサポート**:
+  - `clear_dlq()`: v2 DLQ のクリア（安全なv2管理メソッドとして許可）。
+  - `get_v2_metrics()`: v2エンジンのメトリクス取得（安全な読み取り専用メソッドとして許可）。
+- **`--enable-metrics` フラグ**: `--v2` と組み合わせてv2メトリクス収集を有効化（`get_v2_metrics()` が実際のデータを返すようになる）。
+- **後方互換**: v1.5.0dev2 では `NanaSQLite` コンストラクタのv2パラメータが `**kwargs` 経由でも受け付けられるため、v1.4.0 との完全な互換性を維持。
+
+#### バグ修正 (Bug Fixes)
+- **ruff F841**: `tests/test_v14_compatibility.py` の `test_upsert` における未使用変数 `result` を削除。
+
+
 
 ### nanasqlite v1.4.0 対応 & v2エンジンサポート
 

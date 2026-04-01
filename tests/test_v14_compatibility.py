@@ -1,10 +1,11 @@
 """
-nanasqlite v1.4.0 互換性テスト
+nanasqlite v1.4.0 / v1.5.0 互換性テスト
 
 このテストスイートは以下を検証します:
 1. v1.4.0で追加された危険なメソッドがRPC経由でブロックされることを確認
 2. v1.4.0で追加された安全なメソッドがRPC経由で正常に動作することを確認
 3. v2エンジンモードでの基本動作を確認
+4. v1.5.0dev2で追加された新メソッドの対応確認
 """
 
 import asyncio
@@ -444,9 +445,9 @@ class TestAllowedV14Methods:
         client = await self._connect(port, priv, db_name)
         try:
             # upsertはメインテーブルに対してキー/バリューペアを書き込む
-            result = await client.__getattr__("upsert")(db=db_name)
             # upsertがPermissionErrorや AttributeError を投げなければOK
             # (テーブル名省略でNoneが返ることがある)
+            await client.__getattr__("upsert")(db=db_name)
         except (PermissionError, AttributeError) as e:
             pytest.fail(f"upsert raised unexpected permission error: {e}")
         except Exception:
@@ -681,5 +682,88 @@ class TestV2Engine:
             await client.__getattr__("batch_delete")(
                 ["v2_b1", "v2_b2", "v2_b3"], db=db_name
             )
+        finally:
+            await client.close()
+
+
+# =============================================================================
+# v1.5.0 新メソッドのテスト
+# =============================================================================
+
+
+class TestV15Methods:
+    """v1.5.0dev2 で追加されたメソッドのテスト"""
+
+    async def _connect_compat(self, port, priv, db_name):
+        client = RemoteNanaSQLite(host="127.0.0.1", port=port, verify_ssl=False)
+        client.private_key = priv
+        await client.connect(account_name="tester")
+        return client
+
+    async def _connect_v2(self, port, priv, db_name):
+        client = RemoteNanaSQLite(host="127.0.0.1", port=port, verify_ssl=False)
+        client.private_key = priv
+        await client.connect(account_name="v2user")
+        return client
+
+    @pytest.mark.asyncio
+    async def test_add_hook_is_forbidden(self, compat_server):
+        """add_hook()は任意のPythonオブジェクトを注入するためRPCでは禁止されている"""
+        port, priv, db_dir, db_name = compat_server
+        client = await self._connect_compat(port, priv, db_name)
+        try:
+            with pytest.raises(PermissionError):
+                await client.__getattr__("add_hook")(None, db=db_name)
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_clear_dlq_allowed(self, compat_server):
+        """clear_dlq()はv2 DLQ管理のためブロックされない（v1モードではno-op）"""
+        port, priv, db_dir, db_name = compat_server
+        client = await self._connect_compat(port, priv, db_name)
+        try:
+            result = await client.__getattr__("clear_dlq")(db=db_name)
+            assert result is None
+        except PermissionError as e:
+            pytest.fail(f"clear_dlq() should not be forbidden: {e}")
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_v2_metrics_allowed(self, compat_server):
+        """get_v2_metrics()はブロックされない（v1モードでは空の辞書を返す）"""
+        port, priv, db_dir, db_name = compat_server
+        client = await self._connect_compat(port, priv, db_name)
+        try:
+            result = await client.__getattr__("get_v2_metrics")(db=db_name)
+            assert isinstance(result, dict)
+        except PermissionError as e:
+            pytest.fail(f"get_v2_metrics() should not be forbidden: {e}")
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_v2_clear_dlq(self, v2_server):
+        """v2エンジンでclear_dlq()がRPC経由で動作する"""
+        port, priv, db_dir, db_name = v2_server
+        client = await self._connect_v2(port, priv, db_name)
+        try:
+            result = await client.__getattr__("clear_dlq")(db=db_name)
+            assert result is None
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_v2_get_v2_metrics(self, v2_server):
+        """v2エンジンでget_v2_metrics()がRPC経由でメトリクスを返す"""
+        port, priv, db_dir, db_name = v2_server
+        client = await self._connect_v2(port, priv, db_name)
+        try:
+            await client.set_item_async("metrics_key", "value", db=db_name)
+            await client.__getattr__("flush")(db=db_name)
+            result = await client.__getattr__("get_v2_metrics")(db=db_name)
+            # v2メトリクスが有効な場合は辞書が返る（enable_metricsがFalseなら空の辞書）
+            assert isinstance(result, dict)
         finally:
             await client.close()
