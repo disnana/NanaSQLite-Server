@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 import secrets
 import time
@@ -16,6 +17,14 @@ from . import protocol
 from .accounts import AccountManager
 import argparse
 import os
+
+# AsyncNanaSQLite サポート (nanasqlite v1.5.0dev1 以降で利用可能)
+try:
+    from nanasqlite import AsyncNanaSQLite
+    HAS_ASYNC_NANASQLITE = True
+except ImportError:  # pragma: no cover
+    AsyncNanaSQLite = None  # type: ignore[assignment,misc]
+    HAS_ASYNC_NANASQLITE = False
 
 # 設定
 PUBLIC_KEY_PATH = "nana_public.pub"
@@ -97,6 +106,16 @@ FORBIDDEN_METHODS = {
     "add_hook",
 }
 
+# AsyncNanaSQLite の特殊メソッドマッピング (--async-mode 用)
+# NanaSQLite の __dunder__ メソッドを AsyncNanaSQLite の対応する非同期メソッドに変換する
+ASYNC_SPECIAL_METHOD_MAP: dict[str, str] = {
+    "__getitem__": "aget",
+    "__setitem__": "aset",
+    "__delitem__": "adelete",
+    "__contains__": "acontains",
+    "__len__": "alen",
+}
+
 # ホワイトリスト形式ではなく、全DB操作をexecutorで実行するように変更するため
 # 旧来のWRITE_METHODSは削除
 
@@ -157,15 +176,20 @@ async def get_db_instance(db_path, bulk_load=True):
     """DBインスタンスを取得（遅延初期化、スレッドセーフ）"""
     async with _db_instances_lock:
         if db_path not in _db_instances:
-            # スレッドプールで初期化（IOが発生するため）
-            loop = asyncio.get_running_loop()
             logging.info(f"Initializing new database instance: {db_path}")
-            # _db_configからv2エンジン設定などを反映する
-            init_kwargs = {"bulk_load": bulk_load}
-            init_kwargs.update(_db_config)
-            _db_instances[db_path] = await loop.run_in_executor(
-                get_executor(), lambda: NanaSQLite(db_path, **init_kwargs)
-            )
+            # _db_config から async_mode を除いた設定をコンストラクタに渡す
+            init_kwargs: dict[str, object] = {"bulk_load": bulk_load}
+            init_kwargs.update({k: v for k, v in _db_config.items() if k != "async_mode"})
+
+            if _db_config.get("async_mode") and HAS_ASYNC_NANASQLITE:
+                # AsyncNanaSQLite: __init__ は同期処理のみで DB 接続は遅延初期化
+                _db_instances[db_path] = AsyncNanaSQLite(db_path, **init_kwargs)
+            else:
+                # NanaSQLite: スレッドプールで初期化（IOが発生するため）
+                loop = asyncio.get_running_loop()
+                _db_instances[db_path] = await loop.run_in_executor(
+                    get_executor(), lambda: NanaSQLite(db_path, **init_kwargs)
+                )
         return _db_instances[db_path]
 
 
@@ -498,17 +522,36 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         # 3. DBインスタンスの取得と実行
         db_instance = await get_db_instance(full_db_path)
 
-        if hasattr(db_instance, method_name):
-            method = getattr(db_instance, method_name)
+        # AsyncNanaSQLite の場合: メソッド名を非同期対応にマッピング
+        # 特殊メソッド (__getitem__ 等) → a プレフィックス版 (aget 等)
+        # 同名メソッドが存在しない場合 (batch_get 等) → a プレフィックス版を試みる
+        actual_method_name = method_name
+        if HAS_ASYNC_NANASQLITE and isinstance(db_instance, AsyncNanaSQLite):
+            actual_method_name = ASYNC_SPECIAL_METHOD_MAP.get(method_name, method_name)
+            if not hasattr(db_instance, actual_method_name):
+                a_prefixed = f"a{actual_method_name}"
+                if hasattr(db_instance, a_prefixed):
+                    actual_method_name = a_prefixed
 
-            loop = asyncio.get_running_loop()
+        if hasattr(db_instance, actual_method_name):
+            method = getattr(db_instance, actual_method_name)
+
             try:
-                result = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        get_executor(), functools.partial(method, *args, **kwargs)
-                    ),
-                    timeout=15.0,
-                )
+                if inspect.iscoroutinefunction(method):
+                    # AsyncNanaSQLite: ネイティブな非同期メソッドを直接 await する
+                    result = await asyncio.wait_for(
+                        method(*args, **kwargs),
+                        timeout=15.0,
+                    )
+                else:
+                    # NanaSQLite: 同期メソッドをスレッドプールで実行する
+                    loop = asyncio.get_running_loop()
+                    result = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            get_executor(), functools.partial(method, *args, **kwargs)
+                        ),
+                        timeout=15.0,
+                    )
                 return {"status": "success", "result": result}
             except asyncio.TimeoutError:
                 logging.error(f"Database operation timeout: {method_name} on {target_db_name}")
@@ -576,6 +619,13 @@ def main_sync():
         default=False,
         help="Enable v2 engine metrics collection (v1.5.0+, requires --v2)",
     )
+    # Asyncモード設定
+    parser.add_argument(
+        "--async-mode",
+        action="store_true",
+        default=False,
+        help="Use AsyncNanaSQLite for non-blocking database operations (recommended: nanasqlite v1.5.0dev1+; see docs/async-mode.md)",
+    )
     args = parser.parse_args()
 
     # Python 3.13+ では、シグナルハンドラの登録タイミングが重要な場合があるため
@@ -592,6 +642,7 @@ def main_sync():
                 flush_count=args.flush_count,
                 v2_chunk_size=args.v2_chunk_size,
                 v2_enable_metrics=args.enable_metrics,
+                async_mode=args.async_mode,
             )
         )
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -610,6 +661,7 @@ async def main(
     flush_count=100,
     v2_chunk_size=1000,
     v2_enable_metrics=False,
+    async_mode=False,
 ):
     global _executor, _server, _db_path, _db_config
     _db_path = db_path
@@ -628,6 +680,18 @@ async def main(
             f"flush_count={flush_count}, v2_chunk_size={v2_chunk_size}, "
             f"enable_metrics={v2_enable_metrics}"
         )
+
+    # Asyncモード設定
+    if async_mode:
+        if not HAS_ASYNC_NANASQLITE:
+            raise RuntimeError(
+                "--async-mode requires AsyncNanaSQLite, which is not available in the "
+                "currently installed version of nanasqlite. "
+                "Recommended: nanasqlite v1.5.0dev1 or later. "
+                "See docs/async-mode.md for details."
+            )
+        _db_config["async_mode"] = True
+        logging.info("Async mode enabled: using AsyncNanaSQLite")
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -702,6 +766,19 @@ async def main(
 
         # 監視を停止
         await account_manager.stop_watching()
+
+        # AsyncNanaSQLiteインスタンスを適切に閉じる
+        async with _db_instances_lock:
+            for db_path_key, db_inst in list(_db_instances.items()):
+                if hasattr(db_inst, "close"):
+                    try:
+                        if inspect.iscoroutinefunction(db_inst.close):
+                            await db_inst.close()
+                        else:
+                            db_inst.close()
+                    except Exception as e:
+                        logging.debug(f"Error closing DB instance {db_path_key}: {e}")
+            _db_instances.clear()
 
         # サーバー終了時にエグゼキューターをシャットダウン
         if _executor is not None:

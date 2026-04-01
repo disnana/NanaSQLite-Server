@@ -767,3 +767,242 @@ class TestV15Methods:
             assert isinstance(result, dict)
         finally:
             await client.close()
+
+
+# =============================================================================
+# Asyncモード (AsyncNanaSQLite) のテスト
+# =============================================================================
+
+
+@pytest.fixture
+async def async_server(tmp_path, test_keys):
+    """--async-mode フラグを有効にした独立サーバー"""
+    priv, pub = test_keys
+    db_dir = tmp_path / "dbs"
+    db_dir.mkdir()
+
+    config_path = tmp_path / "accounts.json"
+    db_name = "async_test.sqlite"
+    with open(config_path, "w") as f:
+        json.dump(
+            {
+                "db_dir": str(db_dir),
+                "accounts": [
+                    {
+                        "name": "asyncuser",
+                        "public_key": pub,
+                        "allowed_methods": None,
+                        "forbidden_methods": [],
+                        "allowed_dbs": [db_name],
+                    }
+                ],
+            },
+            f,
+        )
+
+    orig_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    proc = None
+    log_file = None
+    try:
+        generate_certificate()
+        port = _get_free_port()
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = orig_cwd + os.pathsep + os.path.join(orig_cwd, "src")
+        env["NANASQLITE_FORCE_POLLING"] = "1"
+
+        cmd = [
+            sys.executable,
+            "-m",
+            "nanasqlite_server.server",
+            "--port",
+            str(port),
+            "--accounts",
+            str(config_path),
+            "--async-mode",
+        ]
+
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            creationflags = 0
+
+        log_path = tmp_path / "async_server.log"
+        log_file = open(log_path, "w", encoding="utf-8")
+
+        proc = subprocess.Popen(
+            cmd,
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            creationflags=creationflags,
+        )
+
+        ok = await _wait_for_server(port)
+        if not ok:
+            if proc.poll() is not None:
+                log_file.close()
+                with open(log_path) as f:
+                    raise RuntimeError(
+                        f"Async server died (code {proc.returncode}):\n{f.read()}"
+                    )
+            proc.kill()
+            raise RuntimeError("Async server failed to start")
+
+        yield port, priv, db_dir, db_name
+
+    finally:
+        if proc and proc.poll() is None:
+            import signal
+
+            try:
+                if sys.platform == "win32":
+                    os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
+                else:
+                    proc.send_signal(signal.SIGINT)
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+                proc.wait()
+        if log_file:
+            log_file.close()
+        os.chdir(orig_cwd)
+
+
+class TestAsyncMode:
+    """--async-mode (AsyncNanaSQLite) での基本動作テスト"""
+
+    async def _connect(self, port, priv, db_name):
+        client = RemoteNanaSQLite(host="127.0.0.1", port=port, verify_ssl=False)
+        client.private_key = priv
+        await client.connect(account_name="asyncuser")
+        return client
+
+    @pytest.mark.asyncio
+    async def test_async_basic_write_read(self, async_server):
+        """AsyncNanaSQLiteで基本的な書き込み/読み込みが動作する"""
+        port, priv, db_dir, db_name = async_server
+        client = await self._connect(port, priv, db_name)
+        try:
+            await client.set_item_async("async_key", "async_value", db=db_name)
+            result = await client.get_item_async("async_key", db=db_name)
+            assert result == "async_value"
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_async_delete(self, async_server):
+        """AsyncNanaSQLiteで削除が動作する"""
+        port, priv, db_dir, db_name = async_server
+        client = await self._connect(port, priv, db_name)
+        try:
+            await client.set_item_async("del_key", "del_value", db=db_name)
+            await client.del_item_async("del_key", db=db_name)
+            result = await client.get_item_async("del_key", db=db_name)
+            assert result is None
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_async_contains(self, async_server):
+        """AsyncNanaSQLiteで __contains__ が動作する"""
+        port, priv, db_dir, db_name = async_server
+        client = await self._connect(port, priv, db_name)
+        try:
+            await client.set_item_async("exists_key", "val", db=db_name)
+            has = await client.__getattr__("__contains__")("exists_key", db=db_name)
+            assert has is True
+            has2 = await client.__getattr__("__contains__")("no_such_key", db=db_name)
+            assert has2 is False
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_async_batch_operations(self, async_server):
+        """AsyncNanaSQLiteでバッチ操作が動作する"""
+        port, priv, db_dir, db_name = async_server
+        client = await self._connect(port, priv, db_name)
+        try:
+            await client.__getattr__("batch_update")(
+                {"ab1": "v1", "ab2": "v2"}, db=db_name
+            )
+            result = await client.__getattr__("batch_get")(
+                ["ab1", "ab2"], db=db_name
+            )
+            assert result["ab1"] == "v1"
+            assert result["ab2"] == "v2"
+
+            await client.__getattr__("batch_delete")(["ab1", "ab2"], db=db_name)
+            result2 = await client.__getattr__("batch_get")(
+                ["ab1", "ab2"], db=db_name
+            )
+            assert "ab1" not in result2
+            assert "ab2" not in result2
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_async_flush(self, async_server):
+        """AsyncNanaSQLiteでflush()がRPC経由で呼び出し可能"""
+        port, priv, db_dir, db_name = async_server
+        client = await self._connect(port, priv, db_name)
+        try:
+            await client.set_item_async("flush_key", "flush_val", db=db_name)
+            result = await client.__getattr__("flush")(db=db_name)
+            assert result is None
+        except PermissionError as e:
+            pytest.fail(f"flush() should not be forbidden in async mode: {e}")
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_async_forbidden_methods_still_blocked(self, async_server):
+        """AsyncNanaSQLiteモードでも危険なメソッドはブロックされる"""
+        port, priv, db_dir, db_name = async_server
+        client = await self._connect(port, priv, db_name)
+        try:
+            with pytest.raises(PermissionError):
+                await client.__getattr__("add_hook")(None, db=db_name)
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_async_execute_is_forbidden(self, async_server):
+        """AsyncNanaSQLiteモードでも execute() は禁止されている"""
+        port, priv, db_dir, db_name = async_server
+        client = await self._connect(port, priv, db_name)
+        try:
+            with pytest.raises(PermissionError):
+                await client.__getattr__("execute")(
+                    "SELECT 1", db=db_name
+                )
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_async_to_dict(self, async_server):
+        """AsyncNanaSQLiteでto_dict()が動作する"""
+        port, priv, db_dir, db_name = async_server
+        client = await self._connect(port, priv, db_name)
+        try:
+            await client.set_item_async("td_key", "td_val", db=db_name)
+            result = await client.__getattr__("to_dict")(db=db_name)
+            assert isinstance(result, dict)
+            assert result.get("td_key") == "td_val"
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_async_get_fresh(self, async_server):
+        """AsyncNanaSQLiteでget_fresh()が動作する"""
+        port, priv, db_dir, db_name = async_server
+        client = await self._connect(port, priv, db_name)
+        try:
+            await client.set_item_async("fresh_key", "fresh_val", db=db_name)
+            result = await client.__getattr__("get_fresh")("fresh_key", db=db_name)
+            assert result == "fresh_val"
+        finally:
+            await client.close()
+
