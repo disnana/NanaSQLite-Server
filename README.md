@@ -113,6 +113,9 @@ pip install nanasqlite-server
 # 証明書と鍵の生成
 nanasqlite-cert-gen
 nanasqlite-key-gen
+# 証明書と鍵の生成（PATHが通っていない場合）
+python -m nanasqlite_server.cert_gen
+python -m nanasqlite_server.key_gen
 # サーバーの起動
 nanasqlite-server
 ```
