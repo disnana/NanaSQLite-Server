@@ -2,11 +2,11 @@
 
 ## [1.2.2] - 2026-04-01
 
-### nanasqlite v1.5.0dev2 Asyncモード対応
+### nanasqlite v1.5.0dev1 Asyncモード対応
 
 #### 新機能 (New Features)
 - **`--async-mode` フラグ**: `AsyncNanaSQLite` を使用した非ブロッキングなデータベース操作を有効化。
-  - nanasqlite v1.5.0dev2 以降で利用可能。
+  - nanasqlite v1.5.0dev1 以降で利用可能（ASYNC-01: AsyncNanaSQLite への V2 非同期メソッド追加、QUAL-04: イベントループ外インスタンス化の修正）。
   - `AsyncNanaSQLite` はネイティブな非同期メソッドを持つため、`ThreadPoolExecutor` での実行を回避できる。
   - 特殊メソッド (`__getitem__`, `__setitem__`, `__delitem__`, `__contains__`, `__len__`) を対応する非同期メソッド (`aget`, `aset`, `adelete`, `acontains`, `alen`) に自動マッピング。
   - `batch_get` など `AsyncNanaSQLite` に同名メソッドが存在しない場合は `a` プレフィックス版 (`abatch_get`) へ自動フォールバック。

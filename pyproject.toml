@@ -20,7 +20,7 @@ classifiers = [
 ]
 dependencies = [
     "aioquic",
-    "nanasqlite>=1.5.0.dev2",
+    "nanasqlite>=1.5.0.dev1",
     "cryptography",
     "colorama",
     "ormsgpack",
