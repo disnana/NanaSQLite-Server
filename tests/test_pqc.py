@@ -3,7 +3,8 @@ PQC (Post-Quantum Cryptography) サポートのテスト
 
 liboqs-python が利用できる場合に PQC 鍵の生成、アカウント登録、
 署名検証、KEM鍵交換、暗号化通信が正しく動作することを検証します。
-liboqs-python がインストールされていない場合は全テストをスキップします。
+liboqs-python が不要なテスト (test_generate_pqc_keys_no_oqs_raises 等) は
+liboqs-python がない環境でも実行されます。
 """
 
 import base64
@@ -28,7 +29,7 @@ except (ImportError, SystemExit):
     oqs = None
     HAS_OQS = False
 
-pytestmark = pytest.mark.skipif(
+_skip_no_oqs = pytest.mark.skipif(
     not HAS_OQS,
     reason="liboqs-python is not installed. Install with: pip install liboqs-python",
 )
@@ -51,6 +52,7 @@ def pqc_keypair():
 class TestPqcKeyGeneration:
     """PQC 鍵生成のテスト"""
 
+    @_skip_no_oqs
     def test_generate_pqc_keys_creates_files(self, tmp_path, monkeypatch):
         """generate_pqc_keys() が正しくファイルを作成することを確認"""
         monkeypatch.chdir(tmp_path)
@@ -64,6 +66,7 @@ class TestPqcKeyGeneration:
         assert private_path.exists(), "Private key file should be created"
         assert public_path.exists(), "Public key file should be created"
 
+    @_skip_no_oqs
     def test_private_key_file_format(self, tmp_path, monkeypatch):
         """秘密鍵ファイルが正しい JSON 形式であることを確認"""
         monkeypatch.chdir(tmp_path)
@@ -80,6 +83,7 @@ class TestPqcKeyGeneration:
         decoded = base64.b64decode(data["secret_key"])
         assert len(decoded) > 0
 
+    @_skip_no_oqs
     def test_public_key_file_format(self, tmp_path, monkeypatch):
         """公開鍵ファイルが正しい形式であることを確認"""
         monkeypatch.chdir(tmp_path)
@@ -111,6 +115,7 @@ class TestPqcKeyGeneration:
             generate_pqc_keys()
 
 
+@_skip_no_oqs
 class TestPqcAccount:
     """PQC アカウントの作成と署名検証のテスト"""
 
@@ -229,6 +234,7 @@ class TestPqcAccount:
         assert found is None
 
 
+@_skip_no_oqs
 class TestPqcKeyFormat:
     """PQC 公開鍵フォーマットのテスト"""
 
@@ -292,7 +298,6 @@ class TestProtocolEncryptDecrypt:
     """AES-256-GCM 暗号化/復号のテスト (liboqs 不要)"""
 
     # このクラスのテストは liboqs なしでも動作する
-    # ただし pytestmark により liboqs がない場合はスキップされる
 
     def test_derive_session_key_deterministic(self):
         """同じ共有秘密から常に同じセッション鍵が導出されることを確認"""
@@ -382,6 +387,7 @@ class TestProtocolEncryptDecrypt:
         assert decrypted is None
 
 
+@_skip_no_oqs
 class TestPqcKemExchange:
     """PQC KEM 鍵交換のテスト (liboqs 必須)"""
 

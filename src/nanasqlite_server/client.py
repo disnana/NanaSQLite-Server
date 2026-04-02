@@ -171,6 +171,14 @@ class RemoteNanaSQLite(Base):
             except Exception as e:
                 print(f"{Fore.RED}Error loading private key: {e}{Style.RESET_ALL}")
 
+        # 署名鍵が一つも読み込めなかった場合は早期エラー
+        if not self._pqc_secret_key_bytes and self.private_key is None:
+            raise ValueError(
+                "No signing key available: failed to load both the PQC private key "
+                f"({pqc_key_path}) and the Ed25519 private key ({private_key_path}). "
+                "Ensure at least one key file exists and is readable."
+            )
+
     async def connect(self, account_name=None):
         """サーバーに接続し、Ed25519またはOQS PQC署名による認証を行う。
         
@@ -251,11 +259,21 @@ class RemoteNanaSQLite(Base):
                 else:
                     raise PermissionError(f"KEM exchange failed: {kem_ack}")
             elif kem_info and not HAS_OQS:
-                print(
-                    f"{Fore.YELLOW}Warning: Server offered PQC KEM ({kem_info.get('algorithm')}) "
-                    f"but liboqs-python is not installed. "
-                    f"Communication will proceed without session encryption. "
-                    f"Install liboqs-python to enable encrypted sessions.{Style.RESET_ALL}"
+                algorithm = kem_info.get("algorithm")
+                # Close the connection before raising – the server requires KEM
+                # completion before accepting any RPC, so continuing would just
+                # produce a confusing error on the next call.
+                close_method = getattr(self.connection, "close", None)
+                if callable(close_method):
+                    close_result = close_method()
+                    if asyncio.iscoroutine(close_result):
+                        await close_result
+                self.connection = None
+                raise RuntimeError(
+                    f"Server requires PQC KEM ({algorithm}) but liboqs-python is not "
+                    "installed. Cannot complete authentication. "
+                    "Install liboqs-python to enable encrypted sessions: "
+                    "pip install liboqs-python"
                 )
             print(f"{Fore.GREEN}Authentication successful!{Style.RESET_ALL}")
         else:

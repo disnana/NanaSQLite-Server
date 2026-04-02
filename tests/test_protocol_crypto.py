@@ -6,16 +6,8 @@ AES-256-GCM のメッセージ暗号化・復号、HKDF セッション鍵導出
 """
 
 import os
-import sys
 
-# プロジェクトルートとsrcをパスに追加
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-src_dir = os.path.join(project_root, "src")
-for p in (project_root, src_dir):
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
-from nanasqlite_server import protocol  # noqa: E402
+from nanasqlite_server import protocol
 
 
 class TestDeriveSessionKey:

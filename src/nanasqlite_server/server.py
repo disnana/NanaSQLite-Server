@@ -409,20 +409,38 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
                         # PQC KEM が有効な場合、AUTH_OK にKEM情報を含める
                         if self._pqc_kem_algorithm and HAS_OQS:
-                            kem = oqs.KeyEncapsulation(self._pqc_kem_algorithm)
-                            kem_pubkey = kem.generate_keypair()
-                            self._kem_instance = kem
-                            response = {
-                                "type": "auth_ok",
-                                "kem": {
-                                    "algorithm": self._pqc_kem_algorithm,
-                                    "public_key": kem_pubkey,
-                                },
-                            }
-                            logging.info(
-                                f"Authentication successful for {self.client_ip} "
-                                f"(Account: {account.name}), KEM offer sent ({self._pqc_kem_algorithm})"
-                            )
+                            kem = None
+                            try:
+                                kem = oqs.KeyEncapsulation(self._pqc_kem_algorithm)
+                                kem_pubkey = kem.generate_keypair()
+                                self._kem_instance = kem
+                                kem = None  # ownership transferred
+                                response = {
+                                    "type": "auth_ok",
+                                    "kem": {
+                                        "algorithm": self._pqc_kem_algorithm,
+                                        "public_key": kem_pubkey,
+                                    },
+                                }
+                                logging.info(
+                                    f"Authentication successful for {self.client_ip} "
+                                    f"(Account: {account.name}), KEM offer sent ({self._pqc_kem_algorithm})"
+                                )
+                            except Exception:
+                                if kem is not None:
+                                    try:
+                                        kem.free()
+                                    except Exception:  # noqa: BLE001 - free() may fail; ignore cleanup errors
+                                        pass
+                                logging.exception(
+                                    "Failed to create KEM offer for algorithm %s; "
+                                    "falling back to AUTH_OK without KEM",
+                                    self._pqc_kem_algorithm,
+                                )
+                                response = "AUTH_OK"
+                                logging.info(
+                                    f"Authentication successful for {self.client_ip} (Account: {account.name})"
+                                )
                         else:
                             response = "AUTH_OK"
                             logging.info(
@@ -804,6 +822,17 @@ async def main(
                 "(or: pip install 'nanasqlite-server[pqc]'). "
                 "See docs/pqc.md for details."
             )
+        # アルゴリズム名の有効性を起動時に確認
+        try:
+            _kem_check = oqs.KeyEncapsulation(pqc_kem_algorithm)
+            _kem_check.free()
+        except Exception as e:
+            raise RuntimeError(
+                f"Invalid or unsupported PQC KEM algorithm: {pqc_kem_algorithm!r}. "
+                f"Error: {e}. "
+                "Run 'python -c \"import oqs; print(oqs.get_enabled_kem_mechanisms())\"' "
+                "to list supported algorithms."
+            ) from e
         logging.info(
             f"PQC KEM session encryption enabled: algorithm={pqc_kem_algorithm}"
         )

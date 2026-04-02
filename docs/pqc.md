@@ -214,7 +214,7 @@ await db.connect(account_name="pqc_admin")
 await db.set_item_async("key", "value")
 ```
 
-If the server offers KEM but the client does not have `liboqs-python`, the client proceeds without session encryption and prints a warning.
+If the server is started with `--pqc-kem`, the client **must** have `liboqs-python` installed to complete the KEM exchange. Without it, `connect()` will raise a `RuntimeError` and close the connection, since the server requires KEM completion before accepting any RPC.
 
 ### Security Notes
 
@@ -438,7 +438,7 @@ await db.connect(account_name="pqc_admin")
 await db.set_item_async("key", "value")
 ```
 
-サーバーが KEM を提示したがクライアントに `liboqs-python` がない場合、クライアントはセッション暗号化なしで続行し、警告を出力します。
+サーバーを `--pqc-kem` 付きで起動した場合、クライアントも `liboqs-python` がインストールされている必要があります。インストールされていない場合、`connect()` は `RuntimeError` を送出して接続を閉じます。サーバーは KEM 交換が完了するまで RPC を受け付けないためです。
 
 ### セキュリティに関する注意
 
