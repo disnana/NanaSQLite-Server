@@ -100,12 +100,15 @@ class TestPqcKeyGeneration:
 
     def test_generate_pqc_keys_no_oqs_raises(self, monkeypatch):
         """liboqs-python がない場合に ImportError が発生することを確認"""
-        from nanasqlite_server import key_gen as kg_module
+        import sys
+        from nanasqlite_server.key_gen import generate_pqc_keys
 
-        # HAS_OQS を一時的に False に設定
+        # sys.modules 経由でモジュール参照を取得し HAS_OQS を一時的に False に設定
+        kg_module = sys.modules.get("nanasqlite_server.key_gen")
+        assert kg_module is not None, "nanasqlite_server.key_gen should be imported"
         monkeypatch.setattr(kg_module, "HAS_OQS", False)
         with pytest.raises(ImportError, match="liboqs-python"):
-            kg_module.generate_pqc_keys()
+            generate_pqc_keys()
 
 
 class TestPqcAccount:

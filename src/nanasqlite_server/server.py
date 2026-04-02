@@ -297,7 +297,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         if self._kem_instance is not None:
             try:
                 self._kem_instance.free()
-            except Exception:
+            except Exception:  # noqa: BLE001 - free() may fail if already freed; ignore cleanup errors
                 pass
             self._kem_instance = None
         super().connection_lost(exc)
@@ -468,7 +468,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                     finally:
                         try:
                             self._kem_instance.free()
-                        except Exception:
+                        except Exception:  # noqa: BLE001 - free() may fail if already freed; ignore cleanup errors
                             pass
                         self._kem_instance = None
                     # shared_secret が None の場合はエラー応答送信済みなので終了
