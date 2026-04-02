@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import logging
@@ -12,6 +13,19 @@ try:
 except ImportError:
     HAS_WATCHFILES = False
     logging.warning("watchfiles not found, falling back to polling.")
+
+# liboqs-python サポート (オプション: pip install liboqs-python)
+# 耐量子暗号 (PQC) による認証を有効にする
+try:
+    import oqs  # type: ignore[import]
+
+    HAS_OQS = True
+except ImportError:
+    oqs = None  # type: ignore[assignment]
+    HAS_OQS = False
+
+# PQC公開鍵フォーマットのプレフィックス
+OQS_KEY_PREFIX = "oqs-"
 
 
 class Account:
@@ -35,16 +49,39 @@ class Account:
             set(allowed_dbs) if allowed_dbs is not None else None
         )
 
-        # 公開鍵オブジェクトを事前にロード
-        try:
-            self.public_key = serialization.load_ssh_public_key(
-                public_key_pem.encode()
-                if isinstance(public_key_pem, str)
-                else public_key_pem
-            )
-        except Exception as e:
-            logging.error(f"Failed to load public key for account {name}: {e}")
+        key_str = (
+            public_key_pem.decode()
+            if isinstance(public_key_pem, bytes)
+            else public_key_pem
+        )
+
+        # OQS PQC公開鍵の検出: "oqs-<ALGORITHM>:<BASE64>" 形式
+        if isinstance(key_str, str) and key_str.startswith(OQS_KEY_PREFIX):
+            self.key_type = "oqs"
             self.public_key = None
+            self.pqc_algorithm = None
+            self.pqc_public_key_bytes = None
+            try:
+                # "oqs-Dilithium3:BASE64..." の解析
+                header, b64_key = key_str.split(":", 1)
+                self.pqc_algorithm = header[len(OQS_KEY_PREFIX):]
+                self.pqc_public_key_bytes = base64.b64decode(b64_key.strip())
+            except Exception as e:
+                logging.error(f"Failed to load PQC public key for account {name}: {e}")
+        else:
+            # 従来の Ed25519 公開鍵
+            self.key_type = "ed25519"
+            self.pqc_algorithm = None
+            self.pqc_public_key_bytes = None
+            try:
+                self.public_key = serialization.load_ssh_public_key(
+                    public_key_pem.encode()
+                    if isinstance(public_key_pem, str)
+                    else public_key_pem
+                )
+            except Exception as e:
+                logging.error(f"Failed to load public key for account {name}: {e}")
+                self.public_key = None
 
 
 class AccountManager:
@@ -158,6 +195,41 @@ class AccountManager:
                     pass
             self._watcher_task = None
 
+    def _verify_account_signature(self, account, signature, challenge):
+        """署名を検証する (Ed25519 または OQS PQC 対応)
+
+        Args:
+            account: 検証対象のアカウント
+            signature: クライアントから受信した署名バイト列
+            challenge: サーバーが送付したチャレンジバイト列
+
+        Returns:
+            bool: 署名が有効な場合 True
+        """
+        if account.key_type == "oqs":
+            if not HAS_OQS:
+                logging.error(
+                    "PQC signature verification requested but liboqs-python is not "
+                    "installed. Install with: pip install liboqs-python"
+                )
+                return False
+            if not account.pqc_public_key_bytes or not account.pqc_algorithm:
+                return False
+            try:
+                with oqs.Signature(account.pqc_algorithm) as verifier:
+                    return bool(verifier.verify(challenge, signature, account.pqc_public_key_bytes))
+            except Exception:
+                return False
+        else:
+            # 従来の Ed25519 検証
+            if not account.public_key:
+                return False
+            try:
+                account.public_key.verify(signature, challenge)
+                return True
+            except Exception:
+                return False
+
     def find_account_by_name(self, name):
         """名前でアカウントを検索する"""
         for account in self.accounts:
@@ -170,22 +242,12 @@ class AccountManager:
         # アカウント名のヒントがある場合は、まずそのアカウントを検証 (CPU負荷軽減)
         if account_name_hint:
             account = self.find_account_by_name(account_name_hint)
-            if account and account.public_key:
-                try:
-                    account.public_key.verify(signature, challenge)
+            if account:
+                if self._verify_account_signature(account, signature, challenge):
                     return account
-                except Exception:
-                    # Invalid signature for this hint, fall back to linear search
-                    pass
 
         # 線形探索 (後方互換性)
         for account in self.accounts:
-            if not account.public_key:
-                continue
-            try:
-                account.public_key.verify(signature, challenge)
+            if self._verify_account_signature(account, signature, challenge):
                 return account
-            except Exception:
-                # Signature mismatch, continue to next account
-                continue
         return None

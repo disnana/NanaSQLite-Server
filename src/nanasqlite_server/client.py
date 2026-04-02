@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import builtins
+import json
 import secrets
 import ssl
 from typing import TYPE_CHECKING
@@ -23,6 +25,16 @@ if TYPE_CHECKING:
 else:
     Base = object
 
+# liboqs-python サポート (オプション: pip install liboqs-python)
+# 耐量子暗号 (PQC) による認証署名を有効にする
+try:
+    import oqs  # type: ignore[import]
+
+    HAS_OQS = True
+except ImportError:
+    oqs = None  # type: ignore[assignment]
+    HAS_OQS = False
+
 # NanaSQLiteの例外クラスをマッピング
 EXCEPTION_MAP = {
     name: obj
@@ -41,6 +53,7 @@ for _name in [
     EXCEPTION_MAP[_name] = getattr(builtins, _name)
 
 PRIVATE_KEY_PATH = "nana_private.pem"
+PQC_PRIVATE_KEY_PATH = "nana_private_pqc.json"
 
 
 class NanaRpcClientProtocol(QuicConnectionProtocol):
@@ -65,7 +78,8 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
 
 class RemoteNanaSQLite(Base):
     def __init__(
-        self, host="127.0.0.1", port=4433, ca_cert_path="cert.pem", verify_ssl=True
+        self, host="127.0.0.1", port=4433, ca_cert_path="cert.pem", verify_ssl=True,
+        private_key_path=PRIVATE_KEY_PATH, pqc_key_path=None,
     ):
         """
         RemoteNanaSQLite クライアント
@@ -75,6 +89,8 @@ class RemoteNanaSQLite(Base):
             port: サーバーポート
             ca_cert_path: サーバー証明書のパス (verify_ssl=True時に使用)
             verify_ssl: SSL証明書を検証するか (本番環境ではTrueを推奨)
+            private_key_path: Ed25519秘密鍵ファイルのパス (デフォルト: nana_private.pem)
+            pqc_key_path: OQS PQC秘密鍵JSONファイルのパス (指定時はPQC認証を使用)
         """
         self.host = host
         self.port = port
@@ -114,18 +130,42 @@ class RemoteNanaSQLite(Base):
 
         self.connection = None
 
-        # 秘密鍵のロード
-        try:
-            with open(PRIVATE_KEY_PATH, "rb") as f:
-                self.private_key = serialization.load_pem_private_key(
-                    f.read(), password=None
+        # PQC秘密鍵のロード (指定された場合)
+        self._pqc_secret_key_bytes = None
+        self._pqc_algorithm = None
+        if pqc_key_path:
+            if not HAS_OQS:
+                print(
+                    f"{Fore.RED}Error: PQC key specified but liboqs-python is not installed. "
+                    f"Install with: pip install liboqs-python{Style.RESET_ALL}"
                 )
-        except Exception as e:
-            print(f"{Fore.RED}Error loading private key: {e}{Style.RESET_ALL}")
-            self.private_key = None
+            else:
+                try:
+                    with open(pqc_key_path, "r") as f:
+                        pqc_key_data = json.load(f)
+                    self._pqc_algorithm = pqc_key_data["algorithm"]
+                    self._pqc_secret_key_bytes = base64.b64decode(pqc_key_data["secret_key"])
+                    print(
+                        f"{Fore.CYAN}PQC key loaded: {self._pqc_algorithm}{Style.RESET_ALL}"
+                    )
+                except Exception as e:
+                    print(f"{Fore.RED}Error loading PQC key: {e}{Style.RESET_ALL}")
+                    self._pqc_secret_key_bytes = None
+                    self._pqc_algorithm = None
+
+        # Ed25519秘密鍵のロード (PQCキーが未指定または失敗した場合)
+        self.private_key = None
+        if not self._pqc_secret_key_bytes:
+            try:
+                with open(private_key_path, "rb") as f:
+                    self.private_key = serialization.load_pem_private_key(
+                        f.read(), password=None
+                    )
+            except Exception as e:
+                print(f"{Fore.RED}Error loading private key: {e}{Style.RESET_ALL}")
 
     async def connect(self, account_name=None):
-        """サーバーに接続し、Ed25519署名による認証を行う"""
+        """サーバーに接続し、Ed25519またはOQS PQC署名による認証を行う"""
         print(f"{Fore.CYAN}Connecting to {self.host}:{self.port}...{Style.RESET_ALL}")
         self._ctx = connect(
             self.host,
@@ -137,7 +177,12 @@ class RemoteNanaSQLite(Base):
         print(f"{Fore.GREEN}QUIC Connection established.{Style.RESET_ALL}")
 
         # 1. 認証開始 (チャレンジの要求)
-        print(f"{Fore.YELLOW}Starting Passkey Authentication...{Style.RESET_ALL}")
+        auth_mode = (
+            f"PQC ({self._pqc_algorithm})"
+            if self._pqc_secret_key_bytes
+            else "Ed25519 Passkey"
+        )
+        print(f"{Fore.YELLOW}Starting {auth_mode} Authentication...{Style.RESET_ALL}")
         challenge_msg = await self.connection.call_rpc("AUTH_START")
 
         if (
@@ -150,8 +195,12 @@ class RemoteNanaSQLite(Base):
 
         challenge_data = challenge_msg.get("data")
 
-        # 2. 署名の生成
-        signature = self.private_key.sign(challenge_data)
+        # 2. 署名の生成 (PQC または Ed25519)
+        if self._pqc_secret_key_bytes and HAS_OQS:
+            with oqs.Signature(self._pqc_algorithm, self._pqc_secret_key_bytes) as signer:
+                signature = signer.sign(challenge_data)
+        else:
+            signature = self.private_key.sign(challenge_data)
 
         # 3. 署名の送付 (アカウント名ヒントがあれば含める)
         auth_response = {"type": "response", "data": signature}
