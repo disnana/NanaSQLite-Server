@@ -32,7 +32,7 @@ try:
     import oqs  # type: ignore[import]
 
     HAS_OQS = True
-except ImportError:
+except (ImportError, SystemExit):
     oqs = None  # type: ignore[assignment]
     HAS_OQS = False
 
@@ -456,28 +456,33 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             if self.authenticated and self._kem_instance is not None:
                 if isinstance(message, dict) and message.get("type") == "kem_response":
                     ciphertext = message.get("ciphertext")
+                    shared_secret = None
                     try:
                         shared_secret = self._kem_instance.decap_secret(ciphertext)
-                        self.pqc_session_key = protocol.derive_session_key(shared_secret)
-                        logging.info(
-                            f"PQC KEM session established for {self.client_ip} "
-                            f"({self._pqc_kem_algorithm})"
-                        )
                     except Exception as e:
                         logging.warning(f"KEM decapsulation failed for {self.client_ip}: {e}")
                         self._send_response(
                             stream_id,
                             {"status": "error", "message": "KEM exchange failed"},
                         )
-                        return
                     finally:
                         try:
                             self._kem_instance.free()
                         except Exception:
                             pass
                         self._kem_instance = None
-                    # KEM_OK はセッション鍵確立後に送信 (以後の通信は暗号化される)
+                    # shared_secret が None の場合はエラー応答送信済みなので終了
+                    if shared_secret is None:
+                        return
+                    # KEM_OK はセッション鍵を有効化する前に平文で送信する
+                    # (クライアントも同時にセッション鍵を確立するため)
                     self._send_response(stream_id, "KEM_OK")
+                    # KEM_OK 送信後にセッション鍵を有効化 (以後の通信はAES-256-GCMで暗号化される)
+                    self.pqc_session_key = protocol.derive_session_key(shared_secret)
+                    logging.info(
+                        f"PQC KEM session established for {self.client_ip} "
+                        f"({self._pqc_kem_algorithm})"
+                    )
                     return
                 # KEM が提示されたのに kem_response 以外が来た場合は拒否
                 self._send_response(

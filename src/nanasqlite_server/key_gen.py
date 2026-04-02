@@ -8,7 +8,7 @@ try:
     import oqs  # type: ignore[import]
 
     HAS_OQS = True
-except ImportError:
+except (ImportError, SystemExit):
     oqs = None  # type: ignore[assignment]
     HAS_OQS = False
 

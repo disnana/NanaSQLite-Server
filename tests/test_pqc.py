@@ -24,7 +24,7 @@ for p in (project_root, src_dir):
 try:
     import oqs
     HAS_OQS = True
-except ImportError:
+except (ImportError, SystemExit):
     oqs = None
     HAS_OQS = False
 
