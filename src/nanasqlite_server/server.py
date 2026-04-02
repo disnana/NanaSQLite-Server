@@ -26,6 +26,16 @@ except ImportError:  # pragma: no cover
     AsyncNanaSQLite = None  # type: ignore[assignment,misc]
     HAS_ASYNC_NANASQLITE = False
 
+# liboqs-python サポート (オプション: pip install liboqs-python)
+# PQC KEM セッション鍵交換による通信保護を有効にする
+try:
+    import oqs  # type: ignore[import]
+
+    HAS_OQS = True
+except ImportError:
+    oqs = None  # type: ignore[assignment]
+    HAS_OQS = False
+
 # 設定
 PUBLIC_KEY_PATH = "nana_public.pub"
 MAX_FAILED_ATTEMPTS = 3
@@ -225,6 +235,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         account_manager,
         allowed_methods=None,
         forbidden_methods=None,
+        pqc_kem_algorithm=None,
         *args,
         **kwargs,
     ):
@@ -244,6 +255,10 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         self.last_db_name = None
         # Store task references to prevent premature GC in Python 3.13+
         self._background_tasks = set()
+        # PQC KEM セッション鍵交換
+        self._pqc_kem_algorithm = pqc_kem_algorithm  # サーバー設定から渡されるKEMアルゴリズム名
+        self._kem_instance = None  # 接続ごとのエフェメラルKEMインスタンス
+        self.pqc_session_key = None  # KEM後に導出されたAES-256セッション鍵
 
     def connection_made(self, transport):
         super().connection_made(transport)
@@ -273,12 +288,18 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         logging.info(f"New connection from: {self.client_ip}")
 
     def connection_lost(self, exc):
-        """Clean up background tasks when connection is lost
+        """Clean up background tasks and KEM resources when connection is lost
 
         Clear task references when connection terminates. Running tasks
         will complete or be cancelled depending on their current state.
         """
         self._background_tasks.clear()
+        if self._kem_instance is not None:
+            try:
+                self._kem_instance.free()
+            except Exception:
+                pass
+            self._kem_instance = None
         super().connection_lost(exc)
 
     def quic_event_received(self, event):
@@ -340,7 +361,11 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 self.close()
                 return
 
-            message, _ = protocol.decode_message(data)
+            # セッション鍵が確立している場合はAES-256-GCMで復号、そうでなければ通常デコード
+            if self.pqc_session_key:
+                message, _ = protocol.decrypt_message(data, self.pqc_session_key)
+            else:
+                message, _ = protocol.decode_message(data)
             if message is None:
                 return
 
@@ -379,13 +404,30 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                             # アカウントごとの制限がない場合は、サーバー全体のデフォルトDBを使用
                             global _db_path
                             self.last_db_name = os.path.basename(_db_path)
-                        
                         if self.client_ip in failed_attempts:
                             del failed_attempts[self.client_ip]
-                        response = "AUTH_OK"
-                        logging.info(
-                            f"Authentication successful for {self.client_ip} (Account: {account.name})"
-                        )
+
+                        # PQC KEM が有効な場合、AUTH_OK にKEM情報を含める
+                        if self._pqc_kem_algorithm and HAS_OQS:
+                            kem = oqs.KeyEncapsulation(self._pqc_kem_algorithm)
+                            kem_pubkey = kem.generate_keypair()
+                            self._kem_instance = kem
+                            response = {
+                                "type": "auth_ok",
+                                "kem": {
+                                    "algorithm": self._pqc_kem_algorithm,
+                                    "public_key": kem_pubkey,
+                                },
+                            }
+                            logging.info(
+                                f"Authentication successful for {self.client_ip} "
+                                f"(Account: {account.name}), KEM offer sent ({self._pqc_kem_algorithm})"
+                            )
+                        else:
+                            response = "AUTH_OK"
+                            logging.info(
+                                f"Authentication successful for {self.client_ip} (Account: {account.name})"
+                            )
                     else:
                         is_now_banned = record_failed_attempt(self.client_ip)
                         logging.warning(
@@ -410,7 +452,44 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 )
                 return
 
-            # 2. RPC実行 (認証済みの場合)
+            # 2. PQC KEM レスポンス処理 (認証済み、KEM交換待ち)
+            if self.authenticated and self._kem_instance is not None:
+                if isinstance(message, dict) and message.get("type") == "kem_response":
+                    ciphertext = message.get("ciphertext")
+                    try:
+                        shared_secret = self._kem_instance.decap_secret(ciphertext)
+                        self.pqc_session_key = protocol.derive_session_key(shared_secret)
+                        logging.info(
+                            f"PQC KEM session established for {self.client_ip} "
+                            f"({self._pqc_kem_algorithm})"
+                        )
+                    except Exception as e:
+                        logging.warning(f"KEM decapsulation failed for {self.client_ip}: {e}")
+                        self._send_response(
+                            stream_id,
+                            {"status": "error", "message": "KEM exchange failed"},
+                        )
+                        return
+                    finally:
+                        try:
+                            self._kem_instance.free()
+                        except Exception:
+                            pass
+                        self._kem_instance = None
+                    # KEM_OK はセッション鍵確立後に送信 (以後の通信は暗号化される)
+                    self._send_response(stream_id, "KEM_OK")
+                    return
+                # KEM が提示されたのに kem_response 以外が来た場合は拒否
+                self._send_response(
+                    stream_id,
+                    {
+                        "status": "error",
+                        "message": "KEM exchange required before RPC",
+                    },
+                )
+                return
+
+            # 3. RPC実行 (認証済み、KEM完了または不要)
             if self.authenticated:
                 # [FIX 3] 認証済み状態でAUTH_STARTを再送された場合は無視
                 if message == "AUTH_START":
@@ -560,7 +639,10 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             raise AttributeError(f"NanaSQLite object has no attribute '{method_name}'")
 
     def _send_response(self, stream_id, data):
-        payload = protocol.encode_message(data)
+        if self.pqc_session_key:
+            payload = protocol.encrypt_message(data, self.pqc_session_key)
+        else:
+            payload = protocol.encode_message(data)
         self._quic.send_stream_data(stream_id, payload, end_stream=True)
         self.transmit()
 
@@ -626,6 +708,19 @@ def main_sync():
         default=False,
         help="Use AsyncNanaSQLite for non-blocking database operations (recommended: nanasqlite v1.5.0dev1+; see docs/async-mode.md)",
     )
+    # PQC KEM セッション暗号化設定
+    parser.add_argument(
+        "--pqc-kem",
+        type=str,
+        default=None,
+        metavar="ALGORITHM",
+        help=(
+            "Enable post-quantum KEM session key exchange after authentication and encrypt "
+            "all subsequent communication with AES-256-GCM. Requires liboqs-python. "
+            "Example algorithms: Kyber768, Kyber1024, ML-KEM-768. "
+            "See docs/pqc.md for details."
+        ),
+    )
     args = parser.parse_args()
 
     # Python 3.13+ では、シグナルハンドラの登録タイミングが重要な場合があるため
@@ -643,6 +738,7 @@ def main_sync():
                 v2_chunk_size=args.v2_chunk_size,
                 v2_enable_metrics=args.enable_metrics,
                 async_mode=args.async_mode,
+                pqc_kem_algorithm=args.pqc_kem,
             )
         )
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -662,6 +758,7 @@ async def main(
     v2_chunk_size=1000,
     v2_enable_metrics=False,
     async_mode=False,
+    pqc_kem_algorithm=None,
 ):
     global _executor, _server, _db_path, _db_config
     _db_path = db_path
@@ -692,6 +789,19 @@ async def main(
             )
         _db_config["async_mode"] = True
         logging.info("Async mode enabled: using AsyncNanaSQLite")
+
+    # PQC KEM セッション暗号化設定
+    if pqc_kem_algorithm:
+        if not HAS_OQS:
+            raise RuntimeError(
+                "--pqc-kem requires liboqs-python, which is not installed. "
+                "Install with: pip install liboqs-python  "
+                "(or: pip install 'nanasqlite-server[pqc]'). "
+                "See docs/pqc.md for details."
+            )
+        logging.info(
+            f"PQC KEM session encryption enabled: algorithm={pqc_kem_algorithm}"
+        )
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -727,8 +837,10 @@ async def main(
     account_manager = AccountManager(account_config, default_public_key)
 
     logging.info(f"NanaSQLite QUIC Server starting on 127.0.0.1:{port}")
-    logging.info("Auth mode: Ed25519 Passkey (Challenge-Response)")
+    logging.info("Auth mode: Ed25519 Passkey / OQS PQC Signature (Challenge-Response)")
     logging.info("Security: All DB operations run in executor (non-blocking)")
+    if pqc_kem_algorithm:
+        logging.info(f"Session encryption: PQC KEM ({pqc_kem_algorithm}) + AES-256-GCM")
 
     # アカウント情報の監視を開始
     account_manager.start_watching()
@@ -744,7 +856,12 @@ async def main(
             port,
             configuration=configuration,
             create_protocol=lambda *args, **kwargs: NanaRpcProtocol(
-                account_manager, allowed_methods, forbidden_methods, *args, **kwargs
+                account_manager,
+                allowed_methods,
+                forbidden_methods,
+                pqc_kem_algorithm,
+                *args,
+                **kwargs,
             ),
         )
 

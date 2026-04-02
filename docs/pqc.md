@@ -6,13 +6,16 @@
 
 ## English
 
-NanaSQLite-Server optionally supports **post-quantum cryptography (PQC)** for authentication via [liboqs-python](https://github.com/open-quantum-safe/liboqs-python). This allows you to protect against future quantum computer attacks on current asymmetric cryptography (such as Ed25519).
+NanaSQLite-Server optionally supports **post-quantum cryptography (PQC)** via [liboqs-python](https://github.com/open-quantum-safe/liboqs-python) for two independent layers of protection:
 
-> **Note:** PQC authentication is fully **optional**. The default Ed25519-based authentication continues to work without any changes.
+1. **PQC Authentication** (signature) — identity verification using Dilithium, Falcon, or SPHINCS+
+2. **PQC Session Encryption** (KEM + AES-256-GCM) — post-auth key exchange using Kyber/ML-KEM, followed by encrypted communication
+
+> **Note:** Both features are fully **optional**. The default Ed25519-based authentication and unencrypted (but TLS 1.3-protected) communication continue to work without any changes.
 
 ### Supported Algorithms
 
-Any signature algorithm provided by [liboqs](https://openquantumsafe.org/) can be used, including:
+#### Signature Algorithms (for authentication)
 
 | Algorithm | Security Level | Notes |
 |-----------|---------------|-------|
@@ -24,6 +27,17 @@ Any signature algorithm provided by [liboqs](https://openquantumsafe.org/) can b
 | `SPHINCS+-SHA2-128f-simple` | 1 (128-bit) | Hash-based, conservative |
 
 > NIST standardized Dilithium (as ML-DSA) and Falcon (as FN-DSA) in 2024. Dilithium3 is a practical default choice.
+
+#### KEM Algorithms (for session key exchange)
+
+| Algorithm | Security Level | Notes |
+|-----------|---------------|-------|
+| `Kyber512` | 1 (128-bit) | Fast, smaller keys |
+| `Kyber768` | 3 (192-bit) | **Recommended default** |
+| `Kyber1024` | 5 (256-bit) | Highest security |
+| `ML-KEM-768` | 3 (192-bit) | NIST FIPS 203 standard name |
+
+> NIST standardized Kyber as ML-KEM (FIPS 203) in 2024. Kyber768 is a practical default choice.
 
 ### Installation
 
@@ -144,24 +158,87 @@ asyncio.run(main())
 oqs-Dilithium3:BASE64ENCODEDPUBLICKEY...
 ```
 
+---
+
+## Feature 2: PQC Session Encryption (`--pqc-kem`)
+
+After successful authentication, the server can perform a **post-quantum KEM key exchange** with the client, then use the resulting shared secret to derive an **AES-256-GCM session key**. All subsequent RPC messages in that connection are encrypted at the application level.
+
+### Protocol Flow
+
+```
+CLIENT                              SERVER
+  AUTH_START ─────────────────────►
+             ◄──── challenge ────────
+  sign(challenge) ─────────────────►
+             ◄──── {type:"auth_ok", kem:{algorithm, pubkey}} ──
+
+  # KEM encapsulation (client side)
+  ciphertext, client_ss = kem.encap(server_pubkey)
+  session_key = HKDF(client_ss)
+
+  {type:"kem_response", ciphertext} ►
+             ◄────────── "KEM_OK" ──
+  # server: server_ss = kem.decap(ciphertext)
+  #         session_key = HKDF(server_ss)
+
+  [AES-256-GCM encrypted RPC messages]  ◄──────────────────────►
+```
+
+### Starting the Server with PQC KEM Encryption
+
+```bash
+nanasqlite-server --pqc-kem Kyber768
+```
+
+With all PQC features:
+```bash
+nanasqlite-server --pqc-kem Kyber768  # Kyber768 KEM + AES-256-GCM session encryption
+```
+
+> `--pqc-kem` requires `liboqs-python`. If it is not installed, the server will refuse to start.
+
+### Client — KEM Exchange is Automatic
+
+When the server offers KEM, the client handles it automatically in `connect()`:
+
+```python
+db = RemoteNanaSQLite(
+    host="127.0.0.1",
+    port=4433,
+    pqc_key_path="nana_private_pqc.json",  # PQC signature auth (optional)
+)
+await db.connect(account_name="pqc_admin")
+# If server has --pqc-kem, session key is established automatically.
+# All subsequent calls are transparently encrypted.
+await db.set_item_async("key", "value")
+```
+
+If the server offers KEM but the client does not have `liboqs-python`, the client proceeds without session encryption and prints a warning.
+
 ### Security Notes
 
-- The transport layer (QUIC/TLS 1.3) is independent of the authentication key type. PQC authentication protects the **identity verification** step; the **transport** is protected by TLS 1.3 (classical).
-- For full post-quantum security, a post-quantum TLS key exchange algorithm would also be needed. This is outside the scope of this feature.
-- PQC signatures are generally larger than Ed25519 signatures. This has negligible impact on performance given they are only sent once per connection.
-- The `nana_private_pqc.json` file should be protected with appropriate file-system permissions, just like `nana_private.pem`.
+- **Transport security**: QUIC/TLS 1.3 encrypts the transport layer regardless of PQC settings. `--pqc-kem` adds an **application-level** encryption layer on top of TLS 1.3, providing defense-in-depth against future quantum attacks on the TLS key exchange.
+- **Forward secrecy**: A new ephemeral KEM keypair is generated per connection. Compromising one session key does not affect other sessions.
+- **Authentication integrity**: PQC authentication (`oqs-<ALG>:...` public key) and PQC session encryption (`--pqc-kem`) are independent. You can use either, both, or neither.
+- **Session key derivation**: HKDF-SHA256 with context `nanasqlite-pqc-session` is used to derive the 256-bit AES key from the KEM shared secret.
+- **Encryption scheme**: AES-256-GCM with a random 96-bit nonce per message. The 128-bit authentication tag provides message integrity.
+- The `nana_private_pqc.json` file should be protected with appropriate filesystem permissions, just like `nana_private.pem`.
 
 ---
 
 ## 日本語
 
-NanaSQLite-Server は [liboqs-python](https://github.com/open-quantum-safe/liboqs-python) を使用した**耐量子暗号 (PQC)** による認証をオプションでサポートしています。これにより、現在の非対称暗号（Ed25519 など）に対する将来の量子コンピュータ攻撃からシステムを保護できます。
+NanaSQLite-Server は [liboqs-python](https://github.com/open-quantum-safe/liboqs-python) を使用した**耐量子暗号 (PQC)** を 2 つの独立したレイヤーでオプションサポートしています：
 
-> **注意:** PQC 認証は完全に**オプション**です。デフォルトの Ed25519 ベースの認証は、変更なしに引き続き機能します。
+1. **PQC 認証** (署名) — Dilithium・Falcon・SPHINCS+ による身元確認
+2. **PQC セッション暗号化** (KEM + AES-256-GCM) — Kyber/ML-KEM による認証後鍵交換と暗号化通信
+
+> **注意:** 両機能は完全に**オプション**です。デフォルトの Ed25519 ベースの認証と (TLS 1.3 で保護された) 暗号化されていないアプリケーション層の通信は、変更なしに引き続き機能します。
 
 ### 対応アルゴリズム
 
-[liboqs](https://openquantumsafe.org/) が提供する任意の署名アルゴリズムを使用できます。主な選択肢：
+#### 署名アルゴリズム (認証用)
 
 | アルゴリズム | セキュリティレベル | 備考 |
 |-------------|-----------------|------|
@@ -173,6 +250,17 @@ NanaSQLite-Server は [liboqs-python](https://github.com/open-quantum-safe/liboq
 | `SPHINCS+-SHA2-128f-simple` | 1 (128ビット) | ハッシュベース、保守的 |
 
 > NIST は 2024 年に Dilithium (ML-DSA として) と Falcon (FN-DSA として) を標準化しました。Dilithium3 は実用的なデフォルト選択です。
+
+#### KEM アルゴリズム (セッション鍵交換用)
+
+| アルゴリズム | セキュリティレベル | 備考 |
+|-------------|-----------------|------|
+| `Kyber512` | 1 (128ビット) | 高速、小さい鍵 |
+| `Kyber768` | 3 (192ビット) | **推奨デフォルト** |
+| `Kyber1024` | 5 (256ビット) | 最高セキュリティ |
+| `ML-KEM-768` | 3 (192ビット) | NIST FIPS 203 標準名 |
+
+> NIST は 2024 年に Kyber を ML-KEM (FIPS 203) として標準化しました。Kyber768 は実用的なデフォルト選択です。
 
 ### インストール
 
@@ -293,9 +381,71 @@ asyncio.run(main())
 oqs-Dilithium3:BASE64ENCODEDPUBLICKEY...
 ```
 
+---
+
+## 機能2: PQC セッション暗号化 (`--pqc-kem`)
+
+認証成功後、サーバーはクライアントと **耐量子 KEM 鍵交換** を行い、得られた共有秘密から **AES-256-GCM セッション鍵** を導出します。以降のすべての RPC メッセージはアプリケーション層で暗号化されます。
+
+### プロトコルフロー
+
+```
+クライアント                           サーバー
+  AUTH_START ──────────────────────►
+              ◄── チャレンジ ──────────
+  sign(チャレンジ) ────────────────────►
+              ◄── {type:"auth_ok", kem:{algorithm, pubkey}} ──
+
+  # KEM カプセル化 (クライアント側)
+  ciphertext, client_ss = kem.encap(server_pubkey)
+  session_key = HKDF(client_ss)
+
+  {type:"kem_response", ciphertext} ──►
+              ◄───────── "KEM_OK" ──
+  # サーバー: server_ss = kem.decap(ciphertext)
+  #           session_key = HKDF(server_ss)
+
+  [AES-256-GCM 暗号化された RPC メッセージ]  ◄─────────────────────────────────►
+```
+
+### PQC KEM 暗号化でサーバーを起動する
+
+```bash
+nanasqlite-server --pqc-kem Kyber768
+```
+
+PQC 機能をすべて使用する場合:
+```bash
+nanasqlite-server --pqc-kem Kyber768
+# クライアントは PQC 署名認証 (pqc_key_path) と組み合わせて使用可能
+```
+
+> `--pqc-kem` は `liboqs-python` が必要です。インストールされていない場合、サーバーは起動を拒否します。
+
+### クライアント — KEM 交換は自動
+
+サーバーが KEM を提示すると、クライアントは `connect()` 内で自動的に処理します:
+
+```python
+db = RemoteNanaSQLite(
+    host="127.0.0.1",
+    port=4433,
+    pqc_key_path="nana_private_pqc.json",  # PQC 署名認証 (任意)
+)
+await db.connect(account_name="pqc_admin")
+# サーバーに --pqc-kem が設定されていれば、セッション鍵が自動的に確立されます。
+# 以降のすべての呼び出しは透過的に暗号化されます。
+await db.set_item_async("key", "value")
+```
+
+サーバーが KEM を提示したがクライアントに `liboqs-python` がない場合、クライアントはセッション暗号化なしで続行し、警告を出力します。
+
 ### セキュリティに関する注意
 
-- トランスポート層 (QUIC/TLS 1.3) は認証鍵の種類に依存しません。PQC 認証は**身元確認**ステップを保護します。**通信**は TLS 1.3 (古典的暗号) で保護されます。
-- 完全な耐量子セキュリティには、耐量子 TLS 鍵交換アルゴリズムも必要です。これはこの機能のスコープ外です。
-- PQC 署名は一般に Ed25519 署名よりも大きいです。ただし、接続ごとに 1 回しか送信されないため、パフォーマンスへの影響はごくわずかです。
+- **トランスポートセキュリティ**: QUIC/TLS 1.3 は PQC 設定に関わらずトランスポート層を暗号化します。`--pqc-kem` は TLS 1.3 の上に**アプリケーション層**の暗号化を追加し、TLS 鍵交換への将来の量子攻撃に対する多層防御を実現します。
+- **前方秘匿性 (Forward Secrecy)**: 接続ごとに新しいエフェメラル KEM 鍵ペアが生成されます。1 つのセッション鍵が漏洩しても他のセッションには影響しません。
+- **認証との独立性**: PQC 認証 (`oqs-<ALG>:...` 公開鍵) と PQC セッション暗号化 (`--pqc-kem`) は独立しています。どちらか一方、両方、またはどちらも使用しないことができます。
+- **セッション鍵導出**: KEM 共有秘密から 256 ビット AES 鍵を導出するために、コンテキスト `nanasqlite-pqc-session` を持つ HKDF-SHA256 を使用します。
+- **暗号化方式**: メッセージごとにランダムな 96 ビット nonce を使用する AES-256-GCM。128 ビット認証タグがメッセージの整合性を提供します。
 - `nana_private_pqc.json` ファイルは `nana_private.pem` と同様に、適切なファイルシステムのパーミッションで保護してください。
+- PQC 署名は一般に Ed25519 署名よりも大きいです。ただし、接続ごとに 1 回しか送信されないため、パフォーマンスへの影響はごくわずかです。

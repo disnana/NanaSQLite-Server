@@ -60,17 +60,24 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._responses = asyncio.Queue()
+        self.session_key = None  # KEM後に導出されたAES-256セッション鍵
 
     def quic_event_received(self, event):
         from aioquic.quic.events import StreamDataReceived
 
         if isinstance(event, StreamDataReceived):
-            message, _ = protocol.decode_message(event.data)
+            if self.session_key:
+                message, _ = protocol.decrypt_message(event.data, self.session_key)
+            else:
+                message, _ = protocol.decode_message(event.data)
             self._responses.put_nowait(message)
 
     async def call_rpc(self, data):
         stream_id = self._quic.get_next_available_stream_id()
-        payload = protocol.encode_message(data)
+        if self.session_key:
+            payload = protocol.encrypt_message(data, self.session_key)
+        else:
+            payload = protocol.encode_message(data)
         self._quic.send_stream_data(stream_id, payload, end_stream=True)
         self.transmit()
         return await self._responses.get()
@@ -165,7 +172,11 @@ class RemoteNanaSQLite(Base):
                 print(f"{Fore.RED}Error loading private key: {e}{Style.RESET_ALL}")
 
     async def connect(self, account_name=None):
-        """サーバーに接続し、Ed25519またはOQS PQC署名による認証を行う"""
+        """サーバーに接続し、Ed25519またはOQS PQC署名による認証を行う。
+        
+        認証成功後にサーバーがPQC KEM交換を提示した場合は、
+        自動的にKEM鍵交換を行い、AES-256-GCMでの通信暗号化を確立する。
+        """
         print(f"{Fore.CYAN}Connecting to {self.host}:{self.port}...{Style.RESET_ALL}")
         self._ctx = connect(
             self.host,
@@ -209,7 +220,43 @@ class RemoteNanaSQLite(Base):
 
         result = await self.connection.call_rpc(auth_response)
 
+        # 4. 認証結果を処理 (KEM交換を含む可能性あり)
         if result == "AUTH_OK":
+            # レガシーサーバーまたは --pqc-kem なしのサーバー
+            print(f"{Fore.GREEN}Authentication successful!{Style.RESET_ALL}")
+        elif isinstance(result, dict) and result.get("type") == "auth_ok":
+            kem_info = result.get("kem")
+            if kem_info and HAS_OQS:
+                # PQC KEM 鍵交換を実施
+                algorithm = kem_info["algorithm"]
+                server_pubkey = kem_info["public_key"]
+                print(
+                    f"{Fore.YELLOW}Performing PQC KEM key exchange "
+                    f"({algorithm})...{Style.RESET_ALL}"
+                )
+                with oqs.KeyEncapsulation(algorithm) as kem:
+                    ciphertext, shared_secret = kem.encap_secret(server_pubkey)
+                session_key = protocol.derive_session_key(shared_secret)
+
+                kem_ack = await self.connection.call_rpc(
+                    {"type": "kem_response", "ciphertext": ciphertext}
+                )
+                if kem_ack == "KEM_OK":
+                    self.connection.session_key = session_key
+                    print(
+                        f"{Fore.GREEN}PQC session key established ({algorithm}). "
+                        f"All subsequent communication is encrypted with "
+                        f"AES-256-GCM!{Style.RESET_ALL}"
+                    )
+                else:
+                    raise PermissionError(f"KEM exchange failed: {kem_ack}")
+            elif kem_info and not HAS_OQS:
+                print(
+                    f"{Fore.YELLOW}Warning: Server offered PQC KEM ({kem_info.get('algorithm')}) "
+                    f"but liboqs-python is not installed. "
+                    f"Communication will proceed without session encryption. "
+                    f"Install liboqs-python to enable encrypted sessions.{Style.RESET_ALL}"
+                )
             print(f"{Fore.GREEN}Authentication successful!{Style.RESET_ALL}")
         else:
             raise PermissionError(f"Authentication failed: {result}")

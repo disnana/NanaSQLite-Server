@@ -43,7 +43,7 @@ dev = [
     "types-colorama",
     "apsw",
     "ormsgpack",
-    "liboqs-python"
+    "liboqs-python",
 ]
 
 [project.urls]

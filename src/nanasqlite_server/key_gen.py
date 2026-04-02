@@ -101,7 +101,7 @@ def generate_pqc_keys(algorithm="Dilithium3", prefix="nana"):
     print("Done! Created PQC key pair:")
     print(f" - Private Key: {private_path} (Keep this secret!)")
     print(f" - Public Key:  {public_path}  (Register this on the server)")
-    print(f"\nAdd the following to accounts.json:")
+    print("\nAdd the following to accounts.json:")
     print(f'  "public_key": "{public_key_str}"')
 
 
