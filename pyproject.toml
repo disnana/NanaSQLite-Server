@@ -42,6 +42,8 @@ dev = [
     "tox",
     "types-colorama",
     "apsw",
+    "ormsgpack",
+    "liboqs-python"
 ]
 
 [project.urls]
