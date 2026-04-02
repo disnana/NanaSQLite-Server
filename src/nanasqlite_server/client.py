@@ -171,14 +171,6 @@ class RemoteNanaSQLite(Base):
             except Exception as e:
                 print(f"{Fore.RED}Error loading private key: {e}{Style.RESET_ALL}")
 
-        # 署名鍵が一つも読み込めなかった場合は早期エラー
-        if not self._pqc_secret_key_bytes and self.private_key is None:
-            raise ValueError(
-                "No signing key available: failed to load both the PQC private key "
-                f"({pqc_key_path}) and the Ed25519 private key ({private_key_path}). "
-                "Ensure at least one key file exists and is readable."
-            )
-
     async def connect(self, account_name=None):
         """サーバーに接続し、Ed25519またはOQS PQC署名による認証を行う。
         
@@ -218,8 +210,14 @@ class RemoteNanaSQLite(Base):
         if self._pqc_secret_key_bytes and HAS_OQS:
             with oqs.Signature(self._pqc_algorithm, self._pqc_secret_key_bytes) as signer:
                 signature = signer.sign(challenge_data)
-        else:
+        elif self.private_key is not None:
             signature = self.private_key.sign(challenge_data)
+        else:
+            raise ValueError(
+                "No signing key available: no PQC private key and no Ed25519 private key loaded. "
+                "Provide a valid key via private_key_path or pqc_key_path, "
+                "or set client.private_key before calling connect()."
+            )
 
         # 3. 署名の送付 (アカウント名ヒントがあれば含める)
         auth_response = {"type": "response", "data": signature}
@@ -265,9 +263,7 @@ class RemoteNanaSQLite(Base):
                 # produce a confusing error on the next call.
                 close_method = getattr(self.connection, "close", None)
                 if callable(close_method):
-                    close_result = close_method()
-                    if asyncio.iscoroutine(close_result):
-                        await close_result
+                    close_method()
                 self.connection = None
                 raise RuntimeError(
                     f"Server requires PQC KEM ({algorithm}) but liboqs-python is not "
