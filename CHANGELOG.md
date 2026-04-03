@@ -1,5 +1,46 @@
 # 更新履歴 (CHANGELOG)
 
+## [1.3.0] - 2026-04-03
+
+### 耐量子暗号 (PQC) 認証・セッション暗号化の追加
+
+#### 新機能 (New Features)
+- **PQC 認証**: `--pqc-auth` フラグで CRYSTALS-Dilithium / ML-DSA などの耐量子デジタル署名による認証を有効化。
+  - `key_gen.py` で PQC 鍵ペア（秘密鍵 JSON + 公開鍵 JSON）を生成。
+  - サーバーは Ed25519 公開鍵と OQS 公開鍵の両方を同一アカウントで受け付ける。
+- **PQC KEM セッション鍵交換・暗号化**: `--pqc-kem <ALGORITHM>` フラグで認証後に KEM（Key Encapsulation Mechanism）を実施し、導出した AES-256-GCM セッション鍵で以降のすべての RPC 通信を暗号化。
+  - サポートアルゴリズム例: `Kyber512`, `Kyber768`, `Kyber1024`, `ML-KEM-768` など liboqs がサポートするすべての KEM。
+  - プロトコルフロー: 認証完了 → サーバーが KEM 公開鍵を送信 → クライアントがカプセル化して `kem_response` を返送 → 双方で同一セッション鍵を確立 → `KEM_OK` の後すべての通信が AES-256-GCM で暗号化。
+  - クライアント側でも `--pqc-kem` を使う場合は `liboqs-python` が必要。
+- **セッション鍵導出**: HKDF-SHA256 (`protocol.derive_session_key()`) で KEM 共有秘密から 256 ビット AES セッション鍵を導出。
+- **AES-256-GCM メッセージ暗号化**: `protocol.encrypt_message()` / `protocol.decrypt_message()` で全 RPC メッセージを透過的に暗号化・復号。
+
+#### セキュリティ修正 (Security Fixes)
+- **サイレント復号ドロップの修正**: `pqc_session_key` が有効な状態で復号が失敗した場合、以前はリクエストを無音でドロップしていた。現在はクライアントに `{"status": "error", "message": "Invalid encrypted request"}` を返送し、接続を閉じる（改ざんの可能性をすぐに通知）。
+- **KEM バイパス攻撃の防止**: KEM デカプセル化が失敗した場合（不正な暗号文を意図的に送ることで `_kem_instance` を `None` にして KEM 必須チェックを迂回できた問題）、接続を即座に切断するよう修正。
+- **クライアント側 None レスポンスの修正**: `session_key` が有効な状態で復号失敗時に `None` をレスポンスキューに入れていた問題を修正。現在は明確なエラー dict をキューに入れ、接続を閉じる（`call_rpc` が `RuntimeError` を受け取れるようになった）。
+- **KEM インスタンスのリソースリーク防止**: `KeyEncapsulation()` 生成・`generate_keypair()` 呼び出しを `try/finally` で囲み、例外発生時もネイティブリソースが確実に解放されるよう修正。
+- **liboqs なし時のフェイルファスト**: サーバーが KEM を提示したがクライアントに `liboqs-python` がない場合、続行せず即座に `RuntimeError` を発生させ接続を閉じる。
+
+#### テスト (Tests)
+- `tests/test_protocol_crypto.py`: HKDF セッション鍵導出・AES-256-GCM 暗号化復号のユニットテスト 16 件（`liboqs-python` 不要）。
+- `tests/test_pqc.py`: PQC 鍵生成・アカウント検証・KEM 鍵交換の統合テスト（`liboqs-python` がある場合に実行）。
+- `tests/test_pqc_security.py`: セキュリティ修正のリグレッションテスト 13 件（`liboqs-python` 不要）:
+  - サーバー PQC 復号失敗時にエラー送信・接続切断を検証。
+  - KEM デカプセル化失敗によるバイパス攻撃が不可能なことを検証。
+  - クライアント側復号失敗時に `None` でなくエラー dict がキューに入ることを検証。
+
+#### ドキュメント (Documentation)
+- `docs/pqc.md`: KEM アルゴリズム対応表、プロトコルフロー図、セキュリティ注記、日英両対応。
+  - クライアント側も `--pqc-kem` 利用時は `liboqs-python` 必須と明記（従来の誤記を修正）。
+
+#### コード品質 (Code Quality)
+- ruff: 全チェック通過。
+- CodeQL: アラート 0 件。
+- `except (ImportError, SystemExit)` で `import oqs` の失敗を正しく捕捉するよう全ファイル修正。
+
+---
+
 ## [1.2.2] - 2026-04-01
 
 ### nanasqlite v1.5.0dev1 Asyncモード対応
