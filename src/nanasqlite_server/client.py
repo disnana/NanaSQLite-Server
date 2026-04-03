@@ -104,6 +104,15 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
                     return
             else:
                 message, _ = protocol.decode_message(data)
+                if message is None:
+                    # デコードに失敗した場合 (空のストリームや不正なフォーマット)。
+                    # None をそのままキューに入れると呼び出し元が意味不明なエラー
+                    # ("Authentication failed: None" 等) を表示するため、
+                    # 明示的なエラーオブジェクトをキューに入れる。
+                    self._responses.put_nowait(
+                        {"status": "error", "message": "Invalid response format from server"}
+                    )
+                    return
             self._responses.put_nowait(message)
 
     async def call_rpc(self, data):

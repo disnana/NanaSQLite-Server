@@ -113,6 +113,17 @@ class AccountManager:
                 data = json.load(f)
 
             self.db_dir = data.get("db_dir", ".")
+            # db_dir が存在しない場合は自動作成する
+            if not os.path.isdir(self.db_dir):
+                try:
+                    os.makedirs(self.db_dir, exist_ok=True)
+                    logging.warning(
+                        f"Database directory '{self.db_dir}' did not exist and was created automatically."
+                    )
+                except OSError as e:
+                    logging.error(
+                        f"Failed to create database directory '{self.db_dir}': {e}"
+                    )
             new_accounts = []
             for acc_data in data.get("accounts", []):
                 new_accounts.append(

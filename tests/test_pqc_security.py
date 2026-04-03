@@ -143,8 +143,8 @@ class TestServerPqcDecryptFailure:
         proto._quic.close.assert_called()
 
     @pytest.mark.asyncio
-    async def test_no_session_key_none_data_does_not_close(self, proto):
-        """pqc_session_key がない場合、None データはエラーや close を引き起こさない"""
+    async def test_no_session_key_none_data_sends_error_but_not_close(self, proto):
+        """pqc_session_key がない場合、None データはエラーレスポンスを返すが close は呼ばれない"""
         proto.pqc_session_key = None  # セッション鍵なし
 
         bad_data = b"\x00"  # decode_message が None を返す不正なデータ
@@ -154,6 +154,14 @@ class TestServerPqcDecryptFailure:
 
         # セッション鍵がない場合は close を呼んではならない
         proto._quic.close.assert_not_called()
+        # ただし、エラーレスポンスは送信すべき
+        # (クライアントが None を受け取る "Authentication failed: None" を防ぐ)
+        assert proto._quic.send_stream_data.called, "エラーレスポンスを送信すべき"
+        sent_payload = proto._quic.send_stream_data.call_args[0][1]
+        decoded_msg, _ = protocol.decode_message(sent_payload)
+        assert decoded_msg is not None
+        assert decoded_msg.get("status") == "error"
+        assert "Invalid request format" in decoded_msg.get("message", "")
 
     @pytest.mark.asyncio
     async def test_valid_encrypted_message_processes_normally(self, proto):
@@ -355,6 +363,47 @@ class TestClientPqcDecryptFailure:
         assert not client_proto._responses.empty()
         response = client_proto._responses.get_nowait()
         assert response == data
+
+    def test_no_session_key_bad_data_enqueues_error_not_none(self, client_proto):
+        """session_key なしで不正なデータを受信した場合、None ではなくエラー dict がキューに入ることを確認
+
+        修正前の問題: decode_message が None を返すと None がそのままキューに入り、
+                     呼び出し元で "Authentication failed: None" のような誤解を招くエラーになった。
+        修正後の挙動: エラー dict をキューに入れることで意味のあるエラーメッセージが返される。
+        """
+        from aioquic.quic.events import StreamDataReceived
+
+        client_proto.session_key = None  # セッション鍵なし
+
+        # decode_message が None を返す不正なデータ (1バイトのみ)
+        bad_data = b"\x00"
+
+        event = StreamDataReceived(stream_id=0, data=bad_data, end_stream=True)
+        client_proto.quic_event_received(event)
+
+        # キューに入ったのが None でなく、エラー dict であることを確認
+        assert not client_proto._responses.empty(), "レスポンスがキューに入るべき"
+        response = client_proto._responses.get_nowait()
+        assert response is not None, "None ではなくエラー dict が返されるべき"
+        assert isinstance(response, dict), "エラー dict が返されるべき"
+        assert response.get("status") == "error"
+        assert "Invalid response format" in response.get("message", "")
+
+    def test_no_session_key_empty_data_enqueues_error_not_none(self, client_proto):
+        """session_key なしで空データを受信した場合 (接続切断時等)、None ではなくエラー dict がキューに入ること"""
+        from aioquic.quic.events import StreamDataReceived
+
+        client_proto.session_key = None  # セッション鍵なし
+
+        # 空データ: サーバーが応答なしで接続を閉じた場合などに起こりうる
+        event = StreamDataReceived(stream_id=0, data=b"", end_stream=True)
+        client_proto.quic_event_received(event)
+
+        assert not client_proto._responses.empty(), "レスポンスがキューに入るべき"
+        response = client_proto._responses.get_nowait()
+        assert response is not None, "None がキューに入ってはならない"
+        assert isinstance(response, dict)
+        assert response.get("status") == "error"
 
     def test_valid_encrypted_message_decodes_correctly(self, client_proto):
         """session_key 有効時に正常な暗号化メッセージが正しく復号されることを確認"""
