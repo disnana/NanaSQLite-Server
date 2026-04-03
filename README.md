@@ -132,7 +132,8 @@ nanasqlite-server
 耐量子暗号 (PQC) を使用する場合:
 ```bash
 pip install "nanasqlite-server[pqc]"
-nanasqlite-pqc-key-gen --algorithm Dilithium3
+# 基本的なML-DSA-65（Dilithium3相当）
+nanasqlite-pqc-key-gen --algorithm ML-DSA-65
 ```
 詳細は [docs/pqc.md](docs/pqc.md) を参照してください。
 
