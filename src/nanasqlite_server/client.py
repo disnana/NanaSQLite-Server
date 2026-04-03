@@ -110,7 +110,7 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
                     # ("Authentication failed: None" 等) を表示するため、
                     # 明示的なエラーオブジェクトをキューに入れる。
                     self._responses.put_nowait(
-                        {"status": "error", "message": "Invalid response format from server"}
+                        {"status": "error", "message": "Received invalid or empty response from server"}
                     )
                     return
             self._responses.put_nowait(message)

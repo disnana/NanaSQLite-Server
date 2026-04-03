@@ -364,7 +364,7 @@ class TestClientPqcDecryptFailure:
         response = client_proto._responses.get_nowait()
         assert response == data
 
-    def test_no_session_key_bad_data_enqueues_error_not_none(self, client_proto):
+    def test_no_session_key_malformed_data_sends_error_not_none(self, client_proto):
         """session_key なしで不正なデータを受信した場合、None ではなくエラー dict がキューに入ることを確認
 
         修正前の問題: decode_message が None を返すと None がそのままキューに入り、
@@ -387,7 +387,7 @@ class TestClientPqcDecryptFailure:
         assert response is not None, "None ではなくエラー dict が返されるべき"
         assert isinstance(response, dict), "エラー dict が返されるべき"
         assert response.get("status") == "error"
-        assert "Invalid response format" in response.get("message", "")
+        assert "invalid or empty response" in response.get("message", "").lower()
 
     def test_no_session_key_empty_data_enqueues_error_not_none(self, client_proto):
         """session_key なしで空データを受信した場合 (接続切断時等)、None ではなくエラー dict がキューに入ること"""
@@ -404,7 +404,6 @@ class TestClientPqcDecryptFailure:
         assert response is not None, "None がキューに入ってはならない"
         assert isinstance(response, dict)
         assert response.get("status") == "error"
-
     def test_valid_encrypted_message_decodes_correctly(self, client_proto):
         """session_key 有効時に正常な暗号化メッセージが正しく復号されることを確認"""
         from aioquic.quic.events import StreamDataReceived
