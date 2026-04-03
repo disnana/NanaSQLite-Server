@@ -84,6 +84,7 @@ def _make_client_protocol():
         proto._transmit_task = None
         proto._responses = asyncio.Queue()
         proto.session_key = None
+        proto._stream_buffers = {}
 
     return proto
 
@@ -369,5 +370,157 @@ class TestClientPqcDecryptFailure:
         client_proto.quic_event_received(event)
 
         assert not client_proto._responses.empty()
+        response = client_proto._responses.get_nowait()
+        assert response == expected
+
+
+# ---------------------------------------------------------------------------
+# テストクラス 4: クライアント側ストリームバッファリング (Windows断片化対応)
+# ---------------------------------------------------------------------------
+
+
+class TestClientStreamBuffering:
+    """
+    クライアントが断片化されたストリームデータを正しく処理することを検証するテスト。
+
+    Windowsなど一部の環境では、サーバーからの大きなレスポンス (例: auth_ok に含まれる
+    ML-KEM-768 公開鍵 ~1200バイト) が複数の StreamDataReceived イベントに分割される。
+    修正前: 最初のフラグメントで decode_message が None を返し、None がキューに入る
+           → "Authentication failed: None" エラーが発生
+    修正後: end_stream=True まで全フラグメントをバッファリングし、完全なメッセージを処理
+    """
+
+    @pytest.fixture
+    def client_proto(self):
+        return _make_client_protocol()
+
+    def test_fragmented_response_buffered_until_end_stream(self, client_proto):
+        """フラグメント化されたレスポンスが end_stream=True まで処理されないことを確認"""
+        from aioquic.quic.events import StreamDataReceived
+
+        data = protocol.encode_message("AUTH_OK")
+        mid = len(data) // 2
+        part1, part2 = data[:mid], data[mid:]
+
+        # 最初のフラグメント (end_stream=False) - まだキューに入らない
+        event1 = StreamDataReceived(stream_id=0, data=part1, end_stream=False)
+        client_proto.quic_event_received(event1)
+        assert client_proto._responses.qsize() == 0, "フラグメント受信中はキューに入ってはならない"
+
+        # 最後のフラグメント (end_stream=True) - 完全なメッセージをキューに入れる
+        event2 = StreamDataReceived(stream_id=0, data=part2, end_stream=True)
+        client_proto.quic_event_received(event2)
+        assert client_proto._responses.qsize() == 1, "ストリーム完了後にキューに入るべき"
+        assert client_proto._responses.get_nowait() == "AUTH_OK"
+
+    def test_fragmented_response_does_not_enqueue_none(self, client_proto):
+        """断片化されたレスポンスで None がキューに入らないことを確認 (Windows回帰テスト)"""
+        from aioquic.quic.events import StreamDataReceived
+
+        # サーバーの auth_ok レスポンスを模倣 (KEM公開鍵を含む大きなメッセージ)
+        large_response = {
+            "type": "auth_ok",
+            "kem": {
+                "algorithm": "ML-KEM-768",
+                "public_key": os.urandom(1184),  # ML-KEM-768 公開鍵サイズ
+            },
+        }
+        data = protocol.encode_message(large_response)
+
+        # 3つのフラグメントに分割 (Windows等で起こりうる断片化を模倣)
+        third = len(data) // 3
+        parts = [data[:third], data[third:2 * third], data[2 * third:]]
+
+        for i, part in enumerate(parts):
+            is_last = i == len(parts) - 1
+            event = StreamDataReceived(stream_id=0, data=part, end_stream=is_last)
+            client_proto.quic_event_received(event)
+            if not is_last:
+                assert client_proto._responses.qsize() == 0
+
+        # 最終的にキューに入った値が None でないことを確認
+        assert client_proto._responses.qsize() == 1
+        response = client_proto._responses.get_nowait()
+        assert response is not None, "断片化されたレスポンスで None がキューに入ってはならない"
+        assert response == large_response
+
+    def test_single_packet_response_still_works(self, client_proto):
+        """断片化されていない通常のレスポンスが引き続き正しく処理されることを確認"""
+        from aioquic.quic.events import StreamDataReceived
+
+        data = protocol.encode_message({"type": "challenge", "data": b"x" * 32})
+        event = StreamDataReceived(stream_id=0, data=data, end_stream=True)
+        client_proto.quic_event_received(event)
+
+        assert client_proto._responses.qsize() == 1
+        response = client_proto._responses.get_nowait()
+        assert response == {"type": "challenge", "data": b"x" * 32}
+
+    def test_multiple_streams_buffered_independently(self, client_proto):
+        """複数のストリームのバッファが独立して管理されることを確認"""
+        from aioquic.quic.events import StreamDataReceived
+
+        data0 = protocol.encode_message("STREAM_0")
+        data1 = protocol.encode_message("STREAM_1")
+        mid0, mid1 = len(data0) // 2, len(data1) // 2
+
+        # ストリーム 0 の最初のフラグメント
+        client_proto.quic_event_received(
+            StreamDataReceived(stream_id=0, data=data0[:mid0], end_stream=False)
+        )
+        # ストリーム 1 の最初のフラグメント
+        client_proto.quic_event_received(
+            StreamDataReceived(stream_id=1, data=data1[:mid1], end_stream=False)
+        )
+        assert client_proto._responses.qsize() == 0
+
+        # ストリーム 1 を先に完了
+        client_proto.quic_event_received(
+            StreamDataReceived(stream_id=1, data=data1[mid1:], end_stream=True)
+        )
+        assert client_proto._responses.qsize() == 1
+        assert client_proto._responses.get_nowait() == "STREAM_1"
+
+        # ストリーム 0 を完了
+        client_proto.quic_event_received(
+            StreamDataReceived(stream_id=0, data=data0[mid0:], end_stream=True)
+        )
+        assert client_proto._responses.qsize() == 1
+        assert client_proto._responses.get_nowait() == "STREAM_0"
+
+    def test_stream_buffer_cleared_after_end_stream(self, client_proto):
+        """end_stream=True の後にストリームバッファが解放されることを確認 (メモリリーク防止)"""
+        from aioquic.quic.events import StreamDataReceived
+
+        data = protocol.encode_message("TEST")
+        event = StreamDataReceived(stream_id=42, data=data, end_stream=True)
+        client_proto.quic_event_received(event)
+
+        # バッファが解放されていることを確認
+        assert 42 not in client_proto._stream_buffers
+
+    def test_fragmented_encrypted_response_decrypts_correctly(self, client_proto):
+        """断片化された暗号化レスポンスが正しく復号されることを確認"""
+        from aioquic.quic.events import StreamDataReceived
+
+        session_key = os.urandom(32)
+        client_proto.session_key = session_key
+
+        expected = {"status": "success", "result": "encrypted_value"}
+        encrypted = protocol.encrypt_message(expected, session_key)
+        mid = len(encrypted) // 2
+        part1, part2 = encrypted[:mid], encrypted[mid:]
+
+        # 1つ目のフラグメント
+        event1 = StreamDataReceived(stream_id=0, data=part1, end_stream=False)
+        client_proto.quic_event_received(event1)
+        assert client_proto._responses.qsize() == 0
+
+        # 2つ目のフラグメント (最終)
+        event2 = StreamDataReceived(stream_id=0, data=part2, end_stream=True)
+        with patch.object(client_proto, "close"):
+            client_proto.quic_event_received(event2)
+
+        assert client_proto._responses.qsize() == 1
         response = client_proto._responses.get_nowait()
         assert response == expected

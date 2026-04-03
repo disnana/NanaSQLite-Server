@@ -61,13 +61,27 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
         super().__init__(*args, **kwargs)
         self._responses = asyncio.Queue()
         self.session_key = None  # KEM後に導出されたAES-256セッション鍵
+        self._stream_buffers: dict[int, bytearray] = {}  # ストリームごとのデータバッファ (断片化対応)
 
     def quic_event_received(self, event):
         from aioquic.quic.events import StreamDataReceived
 
         if isinstance(event, StreamDataReceived):
+            # ストリームデータをバッファリングして断片化されたパケットを結合する
+            # (Windows等の環境ではサーバーの大きなレスポンスが複数の StreamDataReceived
+            # イベントに分割されて届く場合があり、断片のまま処理すると decode/decrypt が
+            # 失敗して None がキューに入ってしまう)
+            buf = self._stream_buffers.setdefault(event.stream_id, bytearray())
+            buf.extend(event.data)
+
+            if not event.end_stream:
+                # ストリームがまだ続くため、次のデータを待つ
+                return
+
+            # ストリーム完了: バッファ全体を一括処理
+            data = bytes(self._stream_buffers.pop(event.stream_id))
             if self.session_key:
-                message, _ = protocol.decrypt_message(event.data, self.session_key)
+                message, _ = protocol.decrypt_message(data, self.session_key)
                 if message is None:
                     # 復号失敗はデータ改ざんの可能性。エラーをキューに入れて接続を閉じる
                     self._responses.put_nowait(
@@ -76,7 +90,7 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
                     self.close()
                     return
             else:
-                message, _ = protocol.decode_message(event.data)
+                message, _ = protocol.decode_message(data)
             self._responses.put_nowait(message)
 
     async def call_rpc(self, data):
