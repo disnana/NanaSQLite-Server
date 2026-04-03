@@ -68,6 +68,13 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
         if isinstance(event, StreamDataReceived):
             if self.session_key:
                 message, _ = protocol.decrypt_message(event.data, self.session_key)
+                if message is None:
+                    # 復号失敗はデータ改ざんの可能性。エラーをキューに入れて接続を閉じる
+                    self._responses.put_nowait(
+                        {"status": "error", "message": "Decryption failed: connection closed due to possible tampering"}
+                    )
+                    self.close()
+                    return
             else:
                 message, _ = protocol.decode_message(event.data)
             self._responses.put_nowait(message)

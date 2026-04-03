@@ -362,11 +362,19 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 return
 
             # セッション鍵が確立している場合はAES-256-GCMで復号、そうでなければ通常デコード
-            if self.pqc_session_key:
+            used_pqc_session_key = bool(self.pqc_session_key)
+            if used_pqc_session_key:
                 message, _ = protocol.decrypt_message(data, self.pqc_session_key)
             else:
                 message, _ = protocol.decode_message(data)
             if message is None:
+                if used_pqc_session_key:
+                    # 復号失敗はデータ改ざんや不正なフォーマットを示す可能性がある
+                    self._send_response(
+                        stream_id,
+                        {"status": "error", "message": "Invalid encrypted request"},
+                    )
+                    self.close()
                 return
 
             # 1. チャレンジ・レスポンス認証 (パスキー方式)
@@ -489,8 +497,11 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                         except Exception:  # noqa: BLE001 - free() may fail if already freed; ignore cleanup errors
                             pass
                         self._kem_instance = None
-                    # shared_secret が None の場合はエラー応答送信済みなので終了
+                    # shared_secret が None の場合はエラー応答送信済みなので接続を終了する。
+                    # _kem_instance は already freed なので後続リクエストが KEM チェックを
+                    # 迂回して RPC へ進むのを防ぐため、接続を切断する。
                     if shared_secret is None:
+                        self.close()
                         return
                     # KEM_OK はセッション鍵を有効化する前に平文で送信する
                     # (クライアントも同時にセッション鍵を確立するため)
