@@ -7,7 +7,6 @@ AccountManager が自動で作成することを検証します。
 
 import json
 import os
-import pytest
 
 
 class TestDbDirAutoCreation:
@@ -53,7 +52,7 @@ class TestDbDirAutoCreation:
         with open(config_path, "w") as f:
             json.dump({"db_dir": str(db_dir), "accounts": []}, f)
 
-        manager = AccountManager(str(config_path))
+        AccountManager(str(config_path))
         assert os.path.isdir(db_dir), "ネストした db_dir が自動作成されるべき"
 
     def test_default_db_dir_dot_is_not_created(self, tmp_path, monkeypatch):
