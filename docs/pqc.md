@@ -282,12 +282,13 @@ Windows では、`liboqs-python` はネイティブライブラリが必要で�
 
 2. **liboqs のインストール**:
    ```bash
+   pacman -Syu
    pacman -S mingw-w64-x86_64-liboqs
    ```
 
 3. **DLL のコピーとリネーム** (Python バインディングは `oqs.dll` を探します):
    ```powershell
-   # バージョン付き DLL を oqs.dll という名前でコピー（バインディングが oqs.dll を探すため）
+   # バージョン付き DLL を oqs.dll という名前でコピー（バインディングが oqs.dll を探すため。今回の例では-9だが変わる場合がある）
    Copy-Item C:\msys64\mingw64\bin\liboqs-9.dll C:\msys64\mingw64\bin\oqs.dll
 
    # 環境変数に永続設定
