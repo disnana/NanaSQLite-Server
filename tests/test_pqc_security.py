@@ -303,7 +303,6 @@ class TestClientPqcDecryptFailure:
         response = client_proto._responses.get_nowait()
         assert isinstance(response, dict), "None ではなく dict が返されるべき"
         assert response.get("status") == "error"
-        assert response is not None
 
     def test_decrypt_failure_closes_connection(self, client_proto):
         """session_key 有効時に復号失敗すると接続が閉じられることを確認"""
