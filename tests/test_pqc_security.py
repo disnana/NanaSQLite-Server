@@ -524,3 +524,36 @@ class TestClientStreamBuffering:
         assert client_proto._responses.qsize() == 1
         response = client_proto._responses.get_nowait()
         assert response == expected
+
+    def test_stream_buffer_overflow_closes_connection(self, client_proto):
+        """バッファ上限を超えるデータを受信した場合にエラー応答が返され接続が閉じられることを確認"""
+        from aioquic.quic.events import StreamDataReceived
+        from nanasqlite_server.client import MAX_STREAM_BUFFER_SIZE
+
+        # 上限を超える大きなデータを送る (end_stream=False でバッファに蓄積させる)
+        oversized_data = b"\x00" * (MAX_STREAM_BUFFER_SIZE + 1)
+
+        event = StreamDataReceived(stream_id=0, data=oversized_data, end_stream=False)
+        with patch.object(client_proto, "close") as mock_close:
+            client_proto.quic_event_received(event)
+
+        # エラーレスポンスがキューに入り、接続が閉じられることを確認
+        assert client_proto._responses.qsize() == 1
+        response = client_proto._responses.get_nowait()
+        assert isinstance(response, dict)
+        assert response.get("status") == "error"
+        assert "overflow" in response.get("message", "").lower()
+        mock_close.assert_called()
+
+    def test_stream_buffer_overflow_clears_buffer(self, client_proto):
+        """バッファ上限超過時にストリームバッファがクリアされることを確認 (メモリリーク防止)"""
+        from aioquic.quic.events import StreamDataReceived
+        from nanasqlite_server.client import MAX_STREAM_BUFFER_SIZE
+
+        oversized_data = b"\x00" * (MAX_STREAM_BUFFER_SIZE + 1)
+        event = StreamDataReceived(stream_id=5, data=oversized_data, end_stream=False)
+        with patch.object(client_proto, "close"):
+            client_proto.quic_event_received(event)
+
+        # バッファが解放されていることを確認
+        assert 5 not in client_proto._stream_buffers

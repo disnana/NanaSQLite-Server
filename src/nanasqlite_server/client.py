@@ -55,6 +55,9 @@ for _name in [
 PRIVATE_KEY_PATH = "nana_private.pem"
 PQC_PRIVATE_KEY_PATH = "nana_private_pqc.json"
 
+# クライアント側ストリームバッファの上限 (サーバーと同等の DoS 対策)
+MAX_STREAM_BUFFER_SIZE = 10 * 1024 * 1024  # 10MB (単一ストリーム)
+
 
 class NanaRpcClientProtocol(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs):
@@ -72,6 +75,16 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
             # イベントに分割されて届く場合があり、断片のまま処理すると decode/decrypt が
             # 失敗して None がキューに入ってしまう)
             buf = self._stream_buffers.setdefault(event.stream_id, bytearray())
+
+            # バッファサイズ制限: 異常に大きなレスポンスによるメモリ枯渇を防ぐ
+            if len(buf) + len(event.data) > MAX_STREAM_BUFFER_SIZE:
+                self._stream_buffers.pop(event.stream_id, None)
+                self._responses.put_nowait(
+                    {"status": "error", "message": "Response too large: stream buffer overflow"}
+                )
+                self.close()
+                return
+
             buf.extend(event.data)
 
             if not event.end_stream:
