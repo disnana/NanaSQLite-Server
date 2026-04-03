@@ -16,6 +16,7 @@ The security of this server depends on the method structure of the `NanaSQLite` 
 ### Features
 - **QUIC Protocol**: Built on top of HTTP/3 technology for low latency and high reliability.
 - **Ed25519 Passkey Authentication**: Secure challenge-response authentication.
+- **Post-Quantum Cryptography (PQC)**: Optional [liboqs-python](https://github.com/open-quantum-safe/liboqs-python)-based PQC authentication (Dilithium, Falcon, SPHINCS+, etc.). See [docs/pqc.md](docs/pqc.md).
 - **Performance**: Optimized with `ormsgpack` for ultra-fast message serialization.
 - **Concurrency & Safety**: Thread-safe operations using `RLock` and optimized with `WAL` mode.
 - **Reliability**: Enhanced task management for Python 3.13+ compatibility.
@@ -30,6 +31,13 @@ nanasqlite-cert-gen
 nanasqlite-key-gen
 nanasqlite-server
 ```
+
+For post-quantum cryptography (PQC) authentication:
+```bash
+pip install "nanasqlite-server[pqc]"
+nanasqlite-pqc-key-gen --algorithm Dilithium3
+```
+See [docs/pqc.md](docs/pqc.md) for full PQC setup instructions.
 
 ### Multi-Database & RBAC Configuration
 Configure accounts and database access in `accounts.json`:
@@ -100,6 +108,7 @@ NanaSQLite-Server uses a high-concurrency model optimized for safety:
 ### 特徴
 - **QUIC プロトコル**: HTTP/3 テクノロジーをベースにした低遅延で信頼性の高い通信。
 - **Ed25519 パスキー認証**: チャレンジ/レスポンス方式によるセキュアな認証。
+- **耐量子暗号 (PQC)**: [liboqs-python](https://github.com/open-quantum-safe/liboqs-python) によるオプションの PQC 認証 (Dilithium, Falcon, SPHINCS+ など)。詳細は [docs/pqc.md](docs/pqc.md) を参照。
 - **パフォーマンス**: `ormsgpack` による超高速なメッセージシリアライズ。
 - **並行性と安全性**: `RLock` によるスレッドセーフな操作と `WAL` モードによる最適化。
 - **信頼性**: Python 3.13+ 対応のタスク管理強化により、安定した長時間稼働を実現。
@@ -119,6 +128,13 @@ python -m nanasqlite_server.key_gen
 # サーバーの起動
 nanasqlite-server
 ```
+
+耐量子暗号 (PQC) を使用する場合:
+```bash
+pip install "nanasqlite-server[pqc]"
+nanasqlite-pqc-key-gen --algorithm Dilithium3
+```
+詳細は [docs/pqc.md](docs/pqc.md) を参照してください。
 
 ### マルチDB & RBAC 設定
 `accounts.json` でアカウントとアクセス可能なDBを構成します。

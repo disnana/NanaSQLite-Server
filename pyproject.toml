@@ -28,6 +28,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+pqc = [
+    "liboqs-python",
+]
 speed = [
     "ormsgpack",
 ]
@@ -39,6 +42,8 @@ dev = [
     "tox",
     "types-colorama",
     "apsw",
+    "ormsgpack",
+    "liboqs-python",
 ]
 
 [project.urls]
@@ -49,12 +54,17 @@ dev = [
 nanasqlite-server = "nanasqlite_server.server:main_sync"
 nanasqlite-cert-gen = "nanasqlite_server.cert_gen:generate_certificate"
 nanasqlite-key-gen = "nanasqlite_server.key_gen:generate_keys"
+nanasqlite-pqc-key-gen = "nanasqlite_server.key_gen:generate_pqc_keys_sync"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [[tool.mypy.overrides]]
 module = "ormsgpack"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "oqs"
 ignore_missing_imports = true
 
 [tool.setuptools.dynamic]

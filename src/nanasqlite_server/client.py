@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import builtins
+import json
 import secrets
 import ssl
 from typing import TYPE_CHECKING
@@ -23,6 +25,16 @@ if TYPE_CHECKING:
 else:
     Base = object
 
+# liboqs-python サポート (オプション: pip install liboqs-python)
+# 耐量子暗号 (PQC) による認証署名を有効にする
+try:
+    import oqs  # type: ignore[import]
+
+    HAS_OQS = True
+except (ImportError, SystemExit):
+    oqs = None  # type: ignore[assignment]
+    HAS_OQS = False
+
 # NanaSQLiteの例外クラスをマッピング
 EXCEPTION_MAP = {
     name: obj
@@ -41,23 +53,38 @@ for _name in [
     EXCEPTION_MAP[_name] = getattr(builtins, _name)
 
 PRIVATE_KEY_PATH = "nana_private.pem"
+PQC_PRIVATE_KEY_PATH = "nana_private_pqc.json"
 
 
 class NanaRpcClientProtocol(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._responses = asyncio.Queue()
+        self.session_key = None  # KEM後に導出されたAES-256セッション鍵
 
     def quic_event_received(self, event):
         from aioquic.quic.events import StreamDataReceived
 
         if isinstance(event, StreamDataReceived):
-            message, _ = protocol.decode_message(event.data)
+            if self.session_key:
+                message, _ = protocol.decrypt_message(event.data, self.session_key)
+                if message is None:
+                    # 復号失敗はデータ改ざんの可能性。エラーをキューに入れて接続を閉じる
+                    self._responses.put_nowait(
+                        {"status": "error", "message": "Decryption failed: connection closed due to possible tampering"}
+                    )
+                    self.close()
+                    return
+            else:
+                message, _ = protocol.decode_message(event.data)
             self._responses.put_nowait(message)
 
     async def call_rpc(self, data):
         stream_id = self._quic.get_next_available_stream_id()
-        payload = protocol.encode_message(data)
+        if self.session_key:
+            payload = protocol.encrypt_message(data, self.session_key)
+        else:
+            payload = protocol.encode_message(data)
         self._quic.send_stream_data(stream_id, payload, end_stream=True)
         self.transmit()
         return await self._responses.get()
@@ -65,7 +92,8 @@ class NanaRpcClientProtocol(QuicConnectionProtocol):
 
 class RemoteNanaSQLite(Base):
     def __init__(
-        self, host="127.0.0.1", port=4433, ca_cert_path="cert.pem", verify_ssl=True
+        self, host="127.0.0.1", port=4433, ca_cert_path="cert.pem", verify_ssl=True,
+        private_key_path=PRIVATE_KEY_PATH, pqc_key_path=None,
     ):
         """
         RemoteNanaSQLite クライアント
@@ -75,6 +103,8 @@ class RemoteNanaSQLite(Base):
             port: サーバーポート
             ca_cert_path: サーバー証明書のパス (verify_ssl=True時に使用)
             verify_ssl: SSL証明書を検証するか (本番環境ではTrueを推奨)
+            private_key_path: Ed25519秘密鍵ファイルのパス (デフォルト: nana_private.pem)
+            pqc_key_path: OQS PQC秘密鍵JSONファイルのパス (指定時はPQC認証を使用)
         """
         self.host = host
         self.port = port
@@ -114,18 +144,46 @@ class RemoteNanaSQLite(Base):
 
         self.connection = None
 
-        # 秘密鍵のロード
-        try:
-            with open(PRIVATE_KEY_PATH, "rb") as f:
-                self.private_key = serialization.load_pem_private_key(
-                    f.read(), password=None
+        # PQC秘密鍵のロード (指定された場合)
+        self._pqc_secret_key_bytes = None
+        self._pqc_algorithm = None
+        if pqc_key_path:
+            if not HAS_OQS:
+                print(
+                    f"{Fore.RED}Error: PQC key specified but liboqs-python is not installed. "
+                    f"Install with: pip install liboqs-python{Style.RESET_ALL}"
                 )
-        except Exception as e:
-            print(f"{Fore.RED}Error loading private key: {e}{Style.RESET_ALL}")
-            self.private_key = None
+            else:
+                try:
+                    with open(pqc_key_path, "r") as f:
+                        pqc_key_data = json.load(f)
+                    self._pqc_algorithm = pqc_key_data["algorithm"]
+                    self._pqc_secret_key_bytes = base64.b64decode(pqc_key_data["secret_key"])
+                    print(
+                        f"{Fore.CYAN}PQC key loaded: {self._pqc_algorithm}{Style.RESET_ALL}"
+                    )
+                except Exception as e:
+                    print(f"{Fore.RED}Error loading PQC key: {e}{Style.RESET_ALL}")
+                    self._pqc_secret_key_bytes = None
+                    self._pqc_algorithm = None
+
+        # Ed25519秘密鍵のロード (PQCキーが未指定または失敗した場合)
+        self.private_key = None
+        if not self._pqc_secret_key_bytes:
+            try:
+                with open(private_key_path, "rb") as f:
+                    self.private_key = serialization.load_pem_private_key(
+                        f.read(), password=None
+                    )
+            except Exception as e:
+                print(f"{Fore.RED}Error loading private key: {e}{Style.RESET_ALL}")
 
     async def connect(self, account_name=None):
-        """サーバーに接続し、Ed25519署名による認証を行う"""
+        """サーバーに接続し、Ed25519またはOQS PQC署名による認証を行う。
+        
+        認証成功後にサーバーがPQC KEM交換を提示した場合は、
+        自動的にKEM鍵交換を行い、AES-256-GCMでの通信暗号化を確立する。
+        """
         print(f"{Fore.CYAN}Connecting to {self.host}:{self.port}...{Style.RESET_ALL}")
         self._ctx = connect(
             self.host,
@@ -137,7 +195,12 @@ class RemoteNanaSQLite(Base):
         print(f"{Fore.GREEN}QUIC Connection established.{Style.RESET_ALL}")
 
         # 1. 認証開始 (チャレンジの要求)
-        print(f"{Fore.YELLOW}Starting Passkey Authentication...{Style.RESET_ALL}")
+        auth_mode = (
+            f"PQC ({self._pqc_algorithm})"
+            if self._pqc_secret_key_bytes
+            else "Ed25519 Passkey"
+        )
+        print(f"{Fore.YELLOW}Starting {auth_mode} Authentication...{Style.RESET_ALL}")
         challenge_msg = await self.connection.call_rpc("AUTH_START")
 
         if (
@@ -150,8 +213,18 @@ class RemoteNanaSQLite(Base):
 
         challenge_data = challenge_msg.get("data")
 
-        # 2. 署名の生成
-        signature = self.private_key.sign(challenge_data)
+        # 2. 署名の生成 (PQC または Ed25519)
+        if self._pqc_secret_key_bytes and HAS_OQS:
+            with oqs.Signature(self._pqc_algorithm, self._pqc_secret_key_bytes) as signer:
+                signature = signer.sign(challenge_data)
+        elif self.private_key is not None:
+            signature = self.private_key.sign(challenge_data)
+        else:
+            raise ValueError(
+                "No signing key available: no PQC private key and no Ed25519 private key loaded. "
+                "Provide a valid key via private_key_path or pqc_key_path, "
+                "or set client.private_key before calling connect()."
+            )
 
         # 3. 署名の送付 (アカウント名ヒントがあれば含める)
         auth_response = {"type": "response", "data": signature}
@@ -160,7 +233,51 @@ class RemoteNanaSQLite(Base):
 
         result = await self.connection.call_rpc(auth_response)
 
+        # 4. 認証結果を処理 (KEM交換を含む可能性あり)
         if result == "AUTH_OK":
+            # レガシーサーバーまたは --pqc-kem なしのサーバー
+            print(f"{Fore.GREEN}Authentication successful!{Style.RESET_ALL}")
+        elif isinstance(result, dict) and result.get("type") == "auth_ok":
+            kem_info = result.get("kem")
+            if kem_info and HAS_OQS:
+                # PQC KEM 鍵交換を実施
+                algorithm = kem_info["algorithm"]
+                server_pubkey = kem_info["public_key"]
+                print(
+                    f"{Fore.YELLOW}Performing PQC KEM key exchange "
+                    f"({algorithm})...{Style.RESET_ALL}"
+                )
+                with oqs.KeyEncapsulation(algorithm) as kem:
+                    ciphertext, shared_secret = kem.encap_secret(server_pubkey)
+                session_key = protocol.derive_session_key(shared_secret)
+
+                kem_ack = await self.connection.call_rpc(
+                    {"type": "kem_response", "ciphertext": ciphertext}
+                )
+                if kem_ack == "KEM_OK":
+                    self.connection.session_key = session_key
+                    print(
+                        f"{Fore.GREEN}PQC session key established ({algorithm}). "
+                        f"All subsequent communication is encrypted with "
+                        f"AES-256-GCM!{Style.RESET_ALL}"
+                    )
+                else:
+                    raise PermissionError(f"KEM exchange failed: {kem_ack}")
+            elif kem_info and not HAS_OQS:
+                algorithm = kem_info.get("algorithm")
+                # Close the connection before raising – the server requires KEM
+                # completion before accepting any RPC, so continuing would just
+                # produce a confusing error on the next call.
+                close_method = getattr(self.connection, "close", None)
+                if callable(close_method):
+                    close_method()
+                self.connection = None
+                raise RuntimeError(
+                    f"Server requires PQC KEM ({algorithm}) but liboqs-python is not "
+                    "installed. Cannot complete authentication. "
+                    "Install liboqs-python to enable encrypted sessions: "
+                    "pip install liboqs-python"
+                )
             print(f"{Fore.GREEN}Authentication successful!{Style.RESET_ALL}")
         else:
             raise PermissionError(f"Authentication failed: {result}")
