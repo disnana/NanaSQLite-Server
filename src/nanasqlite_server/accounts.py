@@ -241,7 +241,7 @@ class AccountManager:
                 new_accounts.append(
                     Account(
                         name=acc_data["name"],
-                        public_key=acc_data["public_key"],
+                        public_key_pem=acc_data["public_key"],
                         allowed_methods=acc_data.get("allowed_methods"),
                         forbidden_methods=acc_data.get("forbidden_methods"),
                         allowed_dbs=acc_data.get("allowed_dbs"),
