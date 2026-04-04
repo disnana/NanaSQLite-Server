@@ -368,13 +368,22 @@ class NanaRpcProtocol(QuicConnectionProtocol):
             else:
                 message, _ = protocol.decode_message(data)
             if message is None:
+                # リクエストのデコード/復号に失敗した場合はエラーを返す
+                # (レスポンスを返さないとクライアントが None を受け取って
+                # "Authentication failed: None" のような誤解を招くエラーになる)
                 if used_pqc_session_key:
-                    # 復号失敗はデータ改ざんや不正なフォーマットを示す可能性がある
+                    # 暗号化セッションでの復号失敗はデータ改ざんの可能性がある
                     self._send_response(
                         stream_id,
                         {"status": "error", "message": "Invalid encrypted request"},
                     )
                     self.close()
+                else:
+                    # 非暗号化セッションでのデコード失敗 (不完全なデータや破損など)
+                    self._send_response(
+                        stream_id,
+                        {"status": "error", "message": "Invalid request format"},
+                    )
                 return
 
             # 1. チャレンジ・レスポンス認証 (パスキー方式)
