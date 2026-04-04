@@ -104,10 +104,10 @@
     - 存在しないアカウント名で実サーバーへの認証失敗
     - account_name 未指定で実サーバーへの認証成功 (後方互換性)
 
-- `tests/test_ip_filter.py` を追加 (計38件):
-  - ユニットテスト `TestParseIpNetworks` (9件): 空リスト、単一 IP、CIDR、複数エントリ、不正エントリなど
-  - ユニットテスト `TestIsIpAllowed` (14件): フィルタなし、allow のみ、block のみ、allow+block、unknown IP など
-  - ユニットテスト `TestAccountIpFilter` (13件): アカウントごとの IP 制限 (blocked/allowed CIDR、カンマ区切り文字列など)
+- `tests/test_ip_filter.py` を追加 (計50件):
+  - ユニットテスト `TestParseIpNetworks` (13件): 空リスト、単一 IP、CIDR、複数エントリ、不正エントリなど
+  - ユニットテスト `TestIsIpAllowed` (18件): フィルタなし、allow のみ、block のみ、allow+block、unknown IP など
+  - ユニットテスト `TestAccountIpFilter` (17件): アカウントごとの IP 制限 (blocked/allowed CIDR、カンマ区切り文字列など)
   - 統合テスト (2件): `--allow-ips` / `--block-ips` オプションを実際のサーバーで検証
 
 ---
