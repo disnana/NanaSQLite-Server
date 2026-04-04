@@ -9,7 +9,7 @@ import signal
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
-from typing import List, Optional
+from typing import List, Optional, Union
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived
@@ -66,8 +66,8 @@ ban_list: dict[str, float] = {}  # {ip: unban_time}
 
 # IPフィルター (サーバー起動時に main() から設定される)
 # 各エントリは IPv4Network または IPv6Network
-_ip_allow_list: List[ipaddress.IPv4Network] = []  # 空=全て許可
-_ip_block_list: List[ipaddress.IPv4Network] = []  # 空=ブロックなし
+_ip_allow_list: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = []  # 空=全て許可
+_ip_block_list: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = []  # 空=ブロックなし
 
 # スレッドプールエグゼキューター (書き込み用) - プロセス終了時に適切に片付けられるように
 _executor = None
@@ -158,7 +158,7 @@ ASYNC_SPECIAL_METHOD_MAP: dict[str, str] = {
     "__contains__": "acontains",
     "__len__": "alen",
 }
-def parse_ip_networks(entries: List[str]) -> List[ipaddress.IPv4Network]:
+def parse_ip_networks(entries: List[str]) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
     """IP アドレス・CIDR 表記の文字列リストを Network オブジェクトに変換する。
 
     個々のIPアドレス ("192.168.1.1") はホスト CIDR として扱う。
