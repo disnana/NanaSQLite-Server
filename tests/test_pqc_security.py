@@ -404,6 +404,7 @@ class TestClientPqcDecryptFailure:
         assert response is not None, "None がキューに入ってはならない"
         assert isinstance(response, dict)
         assert response.get("status") == "error"
+
     def test_valid_encrypted_message_decodes_correctly(self, client_proto):
         """session_key 有効時に正常な暗号化メッセージが正しく復号されることを確認"""
         from aioquic.quic.events import StreamDataReceived
