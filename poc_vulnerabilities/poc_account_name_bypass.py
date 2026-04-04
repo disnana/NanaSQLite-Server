@@ -22,7 +22,6 @@ v1.3.3 以前の `find_account_by_signature()` は `account_name_hint` が指定
 - サーバーの起動は不要。
 """
 
-import base64
 import json
 import secrets
 import tempfile

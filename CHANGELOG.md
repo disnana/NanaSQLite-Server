@@ -2,7 +2,7 @@
 
 ## [1.3.4] - 2026-04-04
 
-### アカウント名の厳格検証・認証バイパス修正
+### アカウント名の厳格検証・認証バイパス修正・IP フィルタリング機能
 
 #### セキュリティ修正 (Security Fixes)
 
@@ -26,6 +26,30 @@
   account_name_hint が未指定の場合は従来通り線形探索 (後方互換性を維持)
   ```
 
+#### 新機能 (New Features)
+
+- **IP アドレスフィルタリング** (`--allow-ips` / `--block-ips` オプション):
+  サーバー起動時に接続元 IP アドレスを CIDR 範囲で許可 or ブロックするオプションを追加しました。
+
+  ```sh
+  # 192.168.1.0/24 からの接続のみ許可
+  nanasqlite-server --allow-ips "192.168.1.0/24"
+
+  # 10.0.0.0/8 からの接続を拒否
+  nanasqlite-server --block-ips "10.0.0.0/8"
+
+  # 複数指定: カンマ区切り
+  nanasqlite-server --allow-ips "192.168.1.0/24,10.0.0.1" --block-ips "192.168.1.100"
+  ```
+
+  **判定ルール** (優先順位順):
+  1. IP が取得できない場合 (`unknown`) はフィルタをスキップして認証に委ねる
+  2. `--block-ips` に含まれる IP は拒否
+  3. `--allow-ips` が設定されている場合、リストに含まれない IP は拒否
+  4. その他は許可
+
+  詳細: `docs/ip-filter.md`
+
 #### PoC (概念実証)
 
 - `poc_vulnerabilities/poc_account_name_bypass.py` を追加:
@@ -46,6 +70,11 @@
     - 誤ったアカウント名で実サーバーへの認証失敗
     - 存在しないアカウント名で実サーバーへの認証失敗
     - account_name 未指定で実サーバーへの認証成功 (後方互換性)
+
+- `tests/test_ip_filter.py` を追加 (計25件):
+  - ユニットテスト `TestParseIpNetworks` (9件): 空リスト、単一 IP、CIDR、複数エントリ、不正エントリなど
+  - ユニットテスト `TestIsIpAllowed` (14件): フィルタなし、allow のみ、block のみ、allow+block、unknown IP など
+  - 統合テスト (2件): `--allow-ips` / `--block-ips` オプションを実際のサーバーで検証
 
 ---
 
