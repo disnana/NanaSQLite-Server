@@ -11,7 +11,7 @@ A secure, high-performance, QUIC-based RPC server for [NanaSQLite](https://githu
 ### ⚠️ Security Warning
 The security of this server depends on the method structure of the `NanaSQLite` class. While we use a dynamic protection mechanism, **updates to NanaSQLite may introduce new methods that could potentially bypass current security restrictions.** Always review the `FORBIDDEN_METHODS` in `server.py` when updating the underlying `nanasqlite` library.
 
-**Current Supported NanaSQLite Version:** v1.3.2+
+**Current Supported NanaSQLite Version:** v1.3.3+
 
 ### Features
 - **QUIC Protocol**: Built on top of HTTP/3 technology for low latency and high reliability.
@@ -27,15 +27,21 @@ The security of this server depends on the method structure of the `NanaSQLite` 
 ### Quick Start
 ```bash
 pip install nanasqlite-server
+# Generate certificate and keys
 nanasqlite-cert-gen
 nanasqlite-key-gen
+# Alternative if the commands above are not on PATH
+python -m nanasqlite_server.cert_gen
+python -m nanasqlite_server.key_gen
+# Start the server
 nanasqlite-server
 ```
 
 For post-quantum cryptography (PQC) authentication:
 ```bash
 pip install "nanasqlite-server[pqc]"
-nanasqlite-pqc-key-gen --algorithm Dilithium3
+# ML-DSA-65 (equivalent to Dilithium3, NIST FIPS 204)
+nanasqlite-pqc-key-gen --algorithm ML-DSA-65
 ```
 See [docs/pqc.md](docs/pqc.md) for full PQC setup instructions.
 
@@ -57,11 +63,40 @@ Configure accounts and database access in `accounts.json`:
             "public_key": "ssh-ed25519 ...",
             "allowed_methods": ["get_item_async", "list_tables"],
             "allowed_dbs": ["main.sqlite"]
+        },
+        {
+            "name": "viewer",
+            "public_key": "ssh-ed25519 ...",
+            "read_only": true,
+            "allowed_dbs": {
+                "logs.sqlite": null,
+                "data.sqlite": ["public_info", "stats"]
+            }
         }
     ]
 }
 ```
-*Note: `db_dir` is the base directory. Remote clients can only access databases explicitly listed in their `allowed_dbs`.*
+*Note: `db_dir` is the base directory. Remote clients can only access databases explicitly listed in their `allowed_dbs`. Use `"read_only": true` to block all write operations. Pass `allowed_dbs` as a dict to restrict access to specific tables per database.*
+
+See [docs/rbac.md](docs/rbac.md) for full RBAC documentation.
+
+### Customizing Allowed Methods
+When launching the server programmatically, you can customize which methods are allowed or forbidden:
+
+```python
+import asyncio
+from nanasqlite_server.server import main
+
+async def start_server():
+    # Allow 'close' explicitly and forbid '__setitem__'
+    await main(
+        allowed_methods={"close"},
+        forbidden_methods={"__setitem__"}
+    )
+
+if __name__ == "__main__":
+    asyncio.run(start_server())
+```
 
 ### Client Usage Example
 ```python

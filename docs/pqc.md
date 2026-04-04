@@ -64,7 +64,7 @@ On Windows, `liboqs-python` requires the `liboqs` native library. The recommende
 
 3. **Copy and rename the DLL** (the Python binding looks for `oqs.dll`):
    ```powershell
-   # Copy the versioned DLL and rename it to oqs.dll
+   # Copy the versioned DLL and rename it to oqs.dll (version number may vary, e.g. -9, -10, ...)
    Copy-Item C:\msys64\mingw64\bin\liboqs-9.dll C:\msys64\mingw64\bin\oqs.dll
 
    # Set the environment variable permanently so Python can find it
@@ -76,6 +76,8 @@ On Windows, `liboqs-python` requires the `liboqs` native library. The recommende
    $pydir = Split-Path (python -c "import sys; print(sys.executable)")
    Copy-Item C:\msys64\mingw64\bin\liboqs-9.dll "$pydir\oqs.dll"
    ```
+
+> **CI / development shortcut:** The repository includes a pre-built `etc/oqs.dll`. When running from the source tree, `nanasqlite_server` automatically adds `etc/` to the DLL search path so no manual setup is required.
 
 4. **Verify the installation**:
    ```python
@@ -300,6 +302,8 @@ Windows では、`liboqs-python` はネイティブライブラリが必要で�
    $pydir = Split-Path (python -c "import sys; print(sys.executable)")
    Copy-Item C:\msys64\mingw64\bin\liboqs-9.dll "$pydir\oqs.dll"
    ```
+
+> **CI / 開発環境向けショートカット:** リポジトリにはビルド済みの `etc/oqs.dll` が含まれています。ソースツリーから実行する場合、`nanasqlite_server` は自動的に `etc/` を DLL 検索パスに追加するため、手動セットアップは不要です。
 
 4. **インストールの確認**:
    ```python

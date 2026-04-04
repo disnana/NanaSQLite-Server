@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import sys
 import logging
 import asyncio
 from typing import Dict, Optional, Set
@@ -15,10 +16,17 @@ except ImportError:
     HAS_WATCHFILES = False
     logging.warning("watchfiles not found, falling back to polling.")
 
+# Windows: etc/oqs.dll を DLL 検索パスに追加して liboqs の自動インストールをバイパス
+if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+    _etc_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "etc",
+    )
+    if os.path.isfile(os.path.join(_etc_dir, "oqs.dll")):
+        os.add_dll_directory(_etc_dir)
+
 # liboqs-python サポート (オプション: pip install liboqs-python)
 # 耐量子暗号 (PQC) による認証を有効にする
-# PermissionError を捕捉するのは、Windows + Python 3.13 環境で liboqs 自動インストール失敗時に
-# テンポラリディレクトリのクリーンアップが PermissionError を送出しサーバーが落ちる問題を防ぐため
 try:
     import oqs  # type: ignore[import]
 
