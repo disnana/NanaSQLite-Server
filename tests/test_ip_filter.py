@@ -423,11 +423,17 @@ async def test_allow_list_permits_local_connection(ip_filter_server_allow):
         def __init__(self, *a, **kw):
             super().__init__(*a, **kw)
             self._q = asyncio.Queue()
+            self._stream_bufs: dict = {}
 
         def quic_event_received(self, event):
             if isinstance(event, StreamDataReceived):
-                msg, _ = proto.decode_message(event.data)
-                self._q.put_nowait(msg)
+                buf = self._stream_bufs.get(event.stream_id, b"")
+                buf += event.data
+                self._stream_bufs[event.stream_id] = buf
+                msg, rest = proto.decode_message(buf)
+                if msg is not None:
+                    self._stream_bufs[event.stream_id] = rest
+                    self._q.put_nowait(msg)
 
         async def send(self, data):
             sid = self._quic.get_next_available_stream_id()
@@ -451,11 +457,17 @@ async def test_block_list_does_not_affect_non_blocked_ip(ip_filter_server_block)
         def __init__(self, *a, **kw):
             super().__init__(*a, **kw)
             self._q = asyncio.Queue()
+            self._stream_bufs: dict = {}
 
         def quic_event_received(self, event):
             if isinstance(event, StreamDataReceived):
-                msg, _ = proto.decode_message(event.data)
-                self._q.put_nowait(msg)
+                buf = self._stream_bufs.get(event.stream_id, b"")
+                buf += event.data
+                self._stream_bufs[event.stream_id] = buf
+                msg, rest = proto.decode_message(buf)
+                if msg is not None:
+                    self._stream_bufs[event.stream_id] = rest
+                    self._q.put_nowait(msg)
 
         async def send(self, data):
             sid = self._quic.get_next_available_stream_id()
