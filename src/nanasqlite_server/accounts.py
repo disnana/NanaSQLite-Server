@@ -1,8 +1,10 @@
 import base64
 import json
 import os
+import sys
 import logging
 import asyncio
+from typing import Dict, Optional, Set
 from cryptography.hazmat.primitives import serialization
 
 # watchfiles が環境にない場合のフォールバック（CI安定性のため）
@@ -14,13 +16,22 @@ except ImportError:
     HAS_WATCHFILES = False
     logging.warning("watchfiles not found, falling back to polling.")
 
+# Windows: etc/oqs.dll を DLL 検索パスに追加して liboqs の自動インストールをバイパス
+if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+    _etc_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "etc",
+    )
+    if os.path.isfile(os.path.join(_etc_dir, "oqs.dll")):
+        os.add_dll_directory(_etc_dir)
+
 # liboqs-python サポート (オプション: pip install liboqs-python)
 # 耐量子暗号 (PQC) による認証を有効にする
 try:
     import oqs  # type: ignore[import]
 
     HAS_OQS = True
-except (ImportError, SystemExit):
+except (ImportError, PermissionError, SystemExit):
     oqs = None  # type: ignore[assignment]
     HAS_OQS = False
 
@@ -36,6 +47,7 @@ class Account:
         allowed_methods=None,
         forbidden_methods=None,
         allowed_dbs=None,
+        read_only=False,
     ):
         self.name = name
         self.public_key_pem = public_key_pem
@@ -45,9 +57,25 @@ class Account:
         self.forbidden_methods = (
             set(forbidden_methods) if forbidden_methods is not None else None
         )
-        self.allowed_dbs = (
-            set(allowed_dbs) if allowed_dbs is not None else None
-        )
+        self.read_only = bool(read_only)
+
+        # allowed_dbs は以下の形式をサポート:
+        #   None                          → 全DB無制限
+        #   ["db1.sqlite", "db2.sqlite"]  → 後方互換: 各DBに対し全テーブル許可
+        #   {"db1.sqlite": None, "db2.sqlite": ["t1", "t2"]}
+        #                                 → DB毎にテーブルを制限 (None=全テーブル許可)
+        # 内部では常に Optional[Dict[str, Optional[Set[str]]]] として保持する
+        if allowed_dbs is None:
+            self.allowed_dbs: Optional[Dict[str, Optional[Set[str]]]] = None
+        elif isinstance(allowed_dbs, list):
+            # 後方互換: リスト → 全テーブル許可の辞書に変換
+            self.allowed_dbs = {db: None for db in allowed_dbs}
+        else:
+            # 辞書形式: 値が list の場合は set に変換、None はそのまま
+            self.allowed_dbs = {
+                db: (set(tables) if tables is not None else None)
+                for db, tables in allowed_dbs.items()
+            }
 
         key_str = (
             public_key_pem.decode()
@@ -133,6 +161,7 @@ class AccountManager:
                         acc_data.get("allowed_methods"),
                         acc_data.get("forbidden_methods"),
                         acc_data.get("allowed_dbs"),
+                        acc_data.get("read_only", False),
                     )
                 )
 

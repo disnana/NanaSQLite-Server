@@ -1,14 +1,25 @@
 import base64
 import json
+import os
+import sys
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
+
+# Windows: etc/oqs.dll を DLL 検索パスに追加して liboqs の自動インストールをバイパス
+if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+    _etc_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "etc",
+    )
+    if os.path.isfile(os.path.join(_etc_dir, "oqs.dll")):
+        os.add_dll_directory(_etc_dir)
 
 # liboqs-python サポート (オプション: pip install liboqs-python)
 try:
     import oqs  # type: ignore[import]
 
     HAS_OQS = True
-except (ImportError, SystemExit):
+except (ImportError, PermissionError, SystemExit):
     oqs = None  # type: ignore[assignment]
     HAS_OQS = False
 

@@ -26,6 +26,13 @@ for p in (src_dir, pkg_dir):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+# Windows: etc/oqs.dll を DLL 検索パスに追加してすべての pytest ワーカーで
+# liboqs の自動インストールをバイパスする（テスト収集前に実行）
+if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+    _etc_dir = os.path.join(project_root, "etc")
+    if os.path.isfile(os.path.join(_etc_dir, "oqs.dll")):
+        os.add_dll_directory(_etc_dir)
+
 # 作業ディレクトリもプロジェクトルートに変更 (private keyのパス解決のため)
 os.chdir(project_root)
 
