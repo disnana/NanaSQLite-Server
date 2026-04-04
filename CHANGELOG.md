@@ -1,5 +1,117 @@
 # 更新履歴 (CHANGELOG)
 
+## [1.3.4] - 2026-04-04
+
+### アカウント名の厳格検証・認証バイパス修正・IP フィルタリング機能
+
+#### セキュリティ修正 (Security Fixes)
+
+- **アカウント名ヒントの厳格化** (`find_account_by_signature` strict mode):
+  `accounts.py` の `find_account_by_signature()` が `account_name_hint` を指定されているにもかかわらず、
+  指定アカウントの署名検証失敗後に全アカウントを線形探索していた問題を修正しました。
+
+  **修正前の動作 (脆弱)**:
+  ```
+  攻撃者が account_name="admin" を指定し、"user1" の秘密鍵で署名した場合:
+  1. "admin" の公開鍵で署名検証 → 失敗
+  2. 線形探索へフォールバック → "user1" の公開鍵で署名検証 → 成功
+  3. "user1" として認証されてしまう (account_name の指定が無意味)
+  ```
+
+  **修正後の動作 (安全)**:
+  ```
+  account_name_hint が指定された場合:
+  - 指定されたアカウントが存在しない → 即座に認証失敗
+  - 指定されたアカウントの署名検証が失敗 → 即座に認証失敗 (フォールバックなし)
+  account_name_hint が未指定の場合は従来通り線形探索 (後方互換性を維持)
+  ```
+
+#### 新機能 (New Features)
+
+- **IP アドレスフィルタリング** (`--allow-ips` / `--block-ips` オプション):
+  サーバー起動時に接続元 IP アドレスを CIDR 範囲で許可 or ブロックするオプションを追加しました。
+  **単一 IP アドレス**（`192.168.1.100`）と **IPv6**（`2001:db8::1`, `2001:db8::/32`, `::1`）にも対応しています。
+
+  ```sh
+  # 192.168.1.0/24 からの接続のみ許可
+  nanasqlite-server --allow-ips "192.168.1.0/24"
+
+  # 単一 IP アドレスを許可（範囲なし）
+  nanasqlite-server --allow-ips "192.168.1.50"
+
+  # 10.0.0.0/8 からの接続を拒否
+  nanasqlite-server --block-ips "10.0.0.0/8"
+
+  # IPv6 の特定アドレスを許可
+  nanasqlite-server --allow-ips "2001:db8::1"
+
+  # IPv6 CIDR 範囲を許可
+  nanasqlite-server --allow-ips "2001:db8::/32"
+
+  # 複数指定: カンマ区切り
+  nanasqlite-server --allow-ips "192.168.1.0/24,10.0.0.1" --block-ips "192.168.1.100"
+  ```
+
+  **判定ルール** (優先順位順):
+  1. IP が取得できない場合 (`unknown`) はフィルタをスキップして認証に委ねる
+  2. `--block-ips` に含まれる IP は拒否
+  3. `--allow-ips` が設定されている場合、リストに含まれない IP は拒否
+  4. その他は許可
+
+  詳細: `docs/ip-filter.md`
+
+- **アカウントごとの IP 制限** (`allowed_ips` / `blocked_ips` アカウントフィールド):
+  `accounts.json` の各アカウントに個別の IP 制限を設定できます。サーバーレベルの IP フィルタリングとは独立して動作し、認証成功後にチェックされます。
+
+  ```json
+  {
+    "db_dir": ".",
+    "accounts": [
+      {
+        "name": "admin",
+        "public_key": "ssh-ed25519 AAAA...",
+        "allowed_ips": ["192.168.1.0/24"]
+      },
+      {
+        "name": "readonly_user",
+        "public_key": "ssh-ed25519 AAAA...",
+        "blocked_ips": ["10.0.0.0/8"]
+      }
+    ]
+  }
+  ```
+
+  アカウントの IP ルールに違反した場合は `AUTH_FAILED` が返されます。
+
+#### PoC (概念実証)
+
+- `poc_vulnerabilities/poc_account_name_bypass.py` を追加:
+  - 修正前の脆弱な動作を再現し、修正後に認証失敗となることを検証するスクリプト。
+
+#### テスト (Tests)
+
+- `tests/test_v134_auth_account_name.py` を追加 (計10件):
+  - ユニットテスト (`TestFindAccountBySignatureStrictMode`, 6件):
+    - 誤ったアカウント名ヒント + 有効な署名 → 認証失敗
+    - 正しいアカウント名ヒント + 有効な署名 → 認証成功
+    - 存在しないアカウント名ヒント → 認証失敗 (フォールバックなし)
+    - ヒントなし → 線形探索で認証成功 (後方互換性)
+    - ヒントアカウント存在・署名不一致 → 他アカウントへフォールバックしない
+    - 正しいヒント + 無効な署名バイト列 → 認証失敗
+  - 統合テスト (4件):
+    - 正しいアカウント名で実サーバーへの認証成功
+    - 誤ったアカウント名で実サーバーへの認証失敗
+    - 存在しないアカウント名で実サーバーへの認証失敗
+    - account_name 未指定で実サーバーへの認証成功 (後方互換性)
+
+- `tests/test_ip_filter.py` を追加 (計50件):
+  - ユニットテスト `TestParseIpNetworks` (13件): 空リスト、単一 IP、CIDR、複数エントリ、不正エントリなど
+  - ユニットテスト `TestIsIpAllowed` (18件): フィルタなし、allow のみ、block のみ、allow+block、unknown IP など
+  - ユニットテスト `TestAccountIpFilter` (17件): アカウントごとの IP 制限 (blocked/allowed CIDR、カンマ区切り文字列など)
+  - 統合テスト (2件): `--allow-ips` / `--block-ips` オプションを実際のサーバーで検証
+
+---
+
 ## [1.3.3] - 2026-04-04
 
 ### RBAC 強化・エラー情報の隠蔽・CI 修正

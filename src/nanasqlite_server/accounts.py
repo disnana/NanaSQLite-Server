@@ -1,10 +1,11 @@
 import base64
+import ipaddress
 import json
 import os
 import sys
 import logging
 import asyncio
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set, Union
 from cryptography.hazmat.primitives import serialization
 
 # watchfiles が環境にない場合のフォールバック（CI安定性のため）
@@ -39,6 +40,32 @@ except (ImportError, PermissionError, SystemExit):
 OQS_KEY_PREFIX = "oqs-"
 
 
+def _parse_ip_networks(
+    entries,
+) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
+    """文字列リスト（またはカンマ区切り文字列）を ip_network オブジェクトのリストに変換する。
+
+    無効なエントリはスキップしてログに記録する。
+    """
+    result: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = []
+    if not entries:
+        return result
+
+    if isinstance(entries, str):
+        items = [s.strip() for s in entries.split(",") if s.strip()]
+    else:
+        items = [str(i).strip() for i in entries]
+
+    for item in items:
+        if not item:
+            continue
+        try:
+            result.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            logging.warning("Invalid IP/CIDR entry in account config, skipping: %r", item)
+    return result
+
+
 class Account:
     def __init__(
         self,
@@ -48,6 +75,8 @@ class Account:
         forbidden_methods=None,
         allowed_dbs=None,
         read_only=False,
+        allowed_ips=None,
+        blocked_ips=None,
     ):
         self.name = name
         self.public_key_pem = public_key_pem
@@ -76,6 +105,15 @@ class Account:
                 db: (set(tables) if tables is not None else None)
                 for db, tables in allowed_dbs.items()
             }
+
+        # アカウントごとの IP フィルター (サーバーレベルの IP フィルターとは独立)
+        # None / 空リスト → 制限なし
+        self._allowed_ip_networks: List[
+            Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
+        ] = _parse_ip_networks(allowed_ips)
+        self._blocked_ip_networks: List[
+            Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
+        ] = _parse_ip_networks(blocked_ips)
 
         key_str = (
             public_key_pem.decode()
@@ -110,6 +148,52 @@ class Account:
             except Exception as e:
                 logging.error(f"Failed to load public key for account {name}: {e}")
                 self.public_key = None
+
+    def is_ip_allowed(self, ip_str: str) -> bool:
+        """このアカウントに対して接続元 IP がアクセス許可されているか確認する。
+
+        判定ルール:
+        1. IP 不明 ("unknown") → スキップして認証に委ねる
+        2. blocked_ips に含まれる → 拒否
+        3. allowed_ips が設定されており含まれない → 拒否
+        4. その他 → 許可
+
+        Args:
+            ip_str: 接続元 IP アドレス文字列または "unknown"
+
+        Returns:
+            True = 許可 / False = 拒否
+        """
+        # アカウントレベルのフィルターが設定されていない場合は許可
+        if not self._allowed_ip_networks and not self._blocked_ip_networks:
+            return True
+
+        if ip_str == "unknown":
+            return True
+
+        try:
+            addr = ipaddress.ip_address(ip_str)
+        except ValueError:
+            logging.warning(
+                "Account IP check: could not parse IP %r for account %s",
+                ip_str,
+                self.name,
+            )
+            return True
+
+        # blocked_ips チェック
+        for net in self._blocked_ip_networks:
+            if addr in net:
+                return False
+
+        # allowed_ips チェック (空 = 制限なし)
+        if self._allowed_ip_networks:
+            for net in self._allowed_ip_networks:
+                if addr in net:
+                    return True
+            return False
+
+        return True
 
 
 class AccountManager:
@@ -156,12 +240,14 @@ class AccountManager:
             for acc_data in data.get("accounts", []):
                 new_accounts.append(
                     Account(
-                        acc_data["name"],
-                        acc_data["public_key"],
-                        acc_data.get("allowed_methods"),
-                        acc_data.get("forbidden_methods"),
-                        acc_data.get("allowed_dbs"),
-                        acc_data.get("read_only", False),
+                        name=acc_data["name"],
+                        public_key_pem=acc_data["public_key"],
+                        allowed_methods=acc_data.get("allowed_methods"),
+                        forbidden_methods=acc_data.get("forbidden_methods"),
+                        allowed_dbs=acc_data.get("allowed_dbs"),
+                        read_only=acc_data.get("read_only", False),
+                        allowed_ips=acc_data.get("allowed_ips"),
+                        blocked_ips=acc_data.get("blocked_ips"),
                     )
                 )
 
@@ -290,14 +376,18 @@ class AccountManager:
 
     def find_account_by_signature(self, signature, challenge, account_name_hint=None):
         """署名を検証して、対応するアカウントを返す"""
-        # アカウント名のヒントがある場合は、まずそのアカウントを検証 (CPU負荷軽減)
+        # アカウント名のヒントがある場合は、指定されたアカウントのみを検証する (厳格モード)
+        # ヒントが不正 (アカウント不存在または署名不一致) な場合は None を返し、
+        # 他のアカウントへのフォールバックは行わない。
+        # これにより「誤ったアカウント名だが正しいキーで認証が通る」問題を防ぐ。
         if account_name_hint:
             account = self.find_account_by_name(account_name_hint)
-            if account:
-                if self._verify_account_signature(account, signature, challenge):
-                    return account
+            if account and self._verify_account_signature(account, signature, challenge):
+                return account
+            # ヒントが指定されたが一致しなかった → 認証失敗 (フォールバックなし)
+            return None
 
-        # 線形探索 (後方互換性)
+        # ヒントなし: 線形探索 (後方互換性)
         for account in self.accounts:
             if self._verify_account_signature(account, signature, challenge):
                 return account

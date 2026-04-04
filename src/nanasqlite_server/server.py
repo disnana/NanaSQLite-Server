@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import ipaddress
 import logging
 import secrets
 import time
@@ -8,6 +9,7 @@ import signal
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
+from typing import List, Union
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived
@@ -61,6 +63,11 @@ failed_attempts: dict[
     str, int
 ] = {}  # {ip: count} (defaultdictから変更してサイズ管理を容易に)
 ban_list: dict[str, float] = {}  # {ip: unban_time}
+
+# IPフィルター (サーバー起動時に main() から設定される)
+# 各エントリは IPv4Network または IPv6Network
+_ip_allow_list: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = []  # 空=全て許可
+_ip_block_list: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = []  # 空=ブロックなし
 
 # スレッドプールエグゼキューター (書き込み用) - プロセス終了時に適切に片付けられるように
 _executor = None
@@ -151,6 +158,75 @@ ASYNC_SPECIAL_METHOD_MAP: dict[str, str] = {
     "__contains__": "acontains",
     "__len__": "alen",
 }
+
+
+def parse_ip_networks(
+    entries: List[str],
+) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
+    """IP アドレス・CIDR 表記の文字列リストを Network オブジェクトに変換する。
+
+    個々のIPアドレス ("192.168.1.1") はホスト CIDR として扱う。
+    不正な値はスキップし、警告ログを出力する。
+    """
+    networks = []
+    for entry in entries:
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            logging.warning("Invalid IP/CIDR entry, skipping: %r", entry)
+    return networks
+
+
+def is_ip_allowed(ip_str: str) -> bool:
+    """接続元 IP がアクセス許可されているか確認する。
+
+    判定ルール:
+    1. IP が不明 ("unknown") の場合: フィルタをスキップして認証に委ねる。
+       QUIC/UDP トランスポートでは peername が取得できないケースがあるため。
+    2. block リストに含まれる場合は常に拒否。
+    3. allow リストが空でない場合: IP が allow リストの **いずれか** に含まれる場合のみ許可。
+    4. 上記いずれにも該当しない場合は許可。
+
+    Args:
+        ip_str: 接続元 IP アドレス文字列 (例: "192.168.1.10") または "unknown"
+
+    Returns:
+        True = 接続を許可 / False = 接続を拒否
+    """
+    if ip_str == "unknown":
+        # IP を取得できなかった接続: QUIC/UDP では peername が None になる環境がある。
+        # IP フィルタの適用をスキップし、チャレンジ・レスポンス認証に委ねる。
+        if _ip_allow_list or _ip_block_list:
+            logging.warning(
+                "IP filter is configured but client IP could not be determined. "
+                "Skipping IP filter; authentication will proceed normally."
+            )
+        return True
+
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        logging.warning("Could not parse client IP address: %r", ip_str)
+        return True
+
+    # block リストチェック
+    for net in _ip_block_list:
+        if addr in net:
+            return False
+
+    # allow リストチェック (空 = 制限なし)
+    if _ip_allow_list:
+        for net in _ip_allow_list:
+            if addr in net:
+                return True
+        return False  # allow リストに含まれない
+
+    return True
+
+
 def is_banned(ip):
     """IPがBANされているか確認し、期限切れのBANを掃除する"""
     # テスト時など、BAN機能を無効化する場合
@@ -266,6 +342,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         self.account = None
         self.challenge = None
         self.client_ip = None
+        self._ip_allowed = True  # connection_made で更新される
         self.stream_buffers = defaultdict(bytearray)
         self.total_buffer_size = 0
         self.account_manager = account_manager
@@ -307,6 +384,8 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
         self.client_ip = addr or "unknown"
         logging.info(f"New connection from: {self.client_ip}")
+        # IP フィルタは接続確立時に一度だけ評価する
+        self._ip_allowed = is_ip_allowed(self.client_ip)
 
     def connection_lost(self, exc):
         """Clean up background tasks and KEM resources when connection is lost
@@ -324,6 +403,11 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         super().connection_lost(exc)
 
     def quic_event_received(self, event):
+        if not self._ip_allowed:
+            logging.warning(f"Connection rejected by IP filter: {self.client_ip}")
+            self.close()
+            return
+
         if is_banned(self.client_ip):
             logging.warning(f"Blocked connection from banned IP: {self.client_ip}")
             self.close()
@@ -433,6 +517,15 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                     )
 
                     if account:
+                        # アカウントレベルの IP 制限チェック
+                        if not account.is_ip_allowed(self.client_ip):
+                            logging.warning(
+                                f"Authentication rejected by account-level IP filter: "
+                                f"{self.client_ip} (Account: {account.name})"
+                            )
+                            self._send_response(stream_id, "AUTH_FAILED")
+                            return
+
                         self.authenticated = True
                         self.account = account
                         # 認証時にデフォルトDBを設定（あれば）
@@ -810,6 +903,31 @@ def main_sync():
             "See docs/pqc.md for details."
         ),
     )
+    # IPフィルター設定
+    parser.add_argument(
+        "--allow-ips",
+        type=str,
+        default=None,
+        metavar="IP_LIST",
+        help=(
+            "Comma-separated list of allowed IP addresses or CIDR ranges. "
+            "When set, only connections from these IPs are accepted. "
+            "Examples: '192.168.1.0/24,10.0.0.1' or '127.0.0.1'. "
+            "See docs/ip-filter.md for details."
+        ),
+    )
+    parser.add_argument(
+        "--block-ips",
+        type=str,
+        default=None,
+        metavar="IP_LIST",
+        help=(
+            "Comma-separated list of blocked IP addresses or CIDR ranges. "
+            "Connections from these IPs are always rejected regardless of allow list. "
+            "Examples: '10.0.0.0/8,172.16.0.5'. "
+            "See docs/ip-filter.md for details."
+        ),
+    )
     args = parser.parse_args()
 
     # Python 3.13+ では、シグナルハンドラの登録タイミングが重要な場合があるため
@@ -828,6 +946,8 @@ def main_sync():
                 v2_enable_metrics=args.enable_metrics,
                 async_mode=args.async_mode,
                 pqc_kem_algorithm=args.pqc_kem,
+                allow_ips=args.allow_ips,
+                block_ips=args.block_ips,
             )
         )
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -848,9 +968,23 @@ async def main(
     v2_enable_metrics=False,
     async_mode=False,
     pqc_kem_algorithm=None,
+    allow_ips=None,
+    block_ips=None,
 ):
-    global _executor, _server, _db_path, _db_config
+    global _executor, _server, _db_path, _db_config, _ip_allow_list, _ip_block_list
     _db_path = db_path
+
+    # IPフィルターの初期化
+    _ip_allow_list = parse_ip_networks(
+        [e.strip() for e in allow_ips.split(",") if e.strip()] if allow_ips else []
+    )
+    _ip_block_list = parse_ip_networks(
+        [e.strip() for e in block_ips.split(",") if e.strip()] if block_ips else []
+    )
+    if _ip_allow_list:
+        logging.info("IP allow list: %s", [str(n) for n in _ip_allow_list])
+    if _ip_block_list:
+        logging.info("IP block list: %s", [str(n) for n in _ip_block_list])
 
     # v2エンジン設定をグローバルに保存 (get_db_instanceで参照される)
     _db_config = {}
