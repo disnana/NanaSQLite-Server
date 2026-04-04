@@ -34,11 +34,23 @@ nanasqlite-server --allow-ips "192.168.1.0/24"
 # Allow multiple ranges or specific IPs (comma-separated)
 nanasqlite-server --allow-ips "192.168.1.0/24,10.0.0.1,172.16.0.0/12"
 
+# Allow only a specific single IP (no range)
+nanasqlite-server --allow-ips "192.168.1.50"
+
 # Block a specific IP address
 nanasqlite-server --block-ips "10.0.0.99"
 
 # Block an entire subnet
 nanasqlite-server --block-ips "10.0.0.0/8"
+
+# IPv6: allow a specific address
+nanasqlite-server --allow-ips "2001:db8::1"
+
+# IPv6: allow a CIDR range
+nanasqlite-server --allow-ips "2001:db8::/32"
+
+# IPv6: block the loopback
+nanasqlite-server --block-ips "::1"
 
 # Combine allow and block (block overrides allow)
 nanasqlite-server \
@@ -72,6 +84,8 @@ Priority order (evaluated in sequence):
 
 ### Important Notes
 
+- **Single IP addresses** are supported in addition to CIDR ranges. A single IP like `192.168.1.100` or `2001:db8::1` is treated as a `/32` (IPv4) or `/128` (IPv6) host route.
+- **IPv6** is fully supported. You can use individual addresses (`::1`, `2001:db8::1`) or CIDR prefixes (`2001:db8::/32`, `fe80::/10`).
 - **CIDR notation** is fully supported (e.g., `192.168.1.0/24`, `10.0.0.0/8`).
 - Invalid entries are **skipped** with a warning log; the server continues to start.
 - IP filtering is a **best-effort** mechanism for QUIC/UDP servers because the transport layer may not always expose the peer address. Always use challenge-response authentication as the primary security mechanism.
@@ -141,11 +155,23 @@ nanasqlite-server --allow-ips "192.168.1.0/24"
 # 複数の範囲または個別 IP を許可 (カンマ区切り)
 nanasqlite-server --allow-ips "192.168.1.0/24,10.0.0.1,172.16.0.0/12"
 
+# 単一 IP アドレス（範囲なし）のみ許可
+nanasqlite-server --allow-ips "192.168.1.50"
+
 # 特定 IP をブロック
 nanasqlite-server --block-ips "10.0.0.99"
 
 # サブネット全体をブロック
 nanasqlite-server --block-ips "10.0.0.0/8"
+
+# IPv6: 特定アドレスを許可
+nanasqlite-server --allow-ips "2001:db8::1"
+
+# IPv6: CIDR 範囲を許可
+nanasqlite-server --allow-ips "2001:db8::/32"
+
+# IPv6: ループバックをブロック
+nanasqlite-server --block-ips "::1"
 
 # allow と block の組み合わせ (block が優先)
 nanasqlite-server \
@@ -179,6 +205,8 @@ nanasqlite-server \
 
 ### 注意事項
 
+- **単一 IP アドレス**も CIDR 範囲と同様に指定できます。`192.168.1.100` や `2001:db8::1` のような単一 IP は、それぞれ `/32`（IPv4）または `/128`（IPv6）のホストルートとして扱われます。
+- **IPv6** に完全対応しています。個別アドレス（`::1`, `2001:db8::1`）と CIDR プレフィックス（`2001:db8::/32`, `fe80::/10`）の両方を使用できます。
 - **CIDR 表記**に完全対応 (例: `192.168.1.0/24`, `10.0.0.0/8`)。
 - 不正なエントリは**スキップ**され、警告ログが出力されます。サーバーは正常に起動を続けます。
 - IP フィルタリングは QUIC/UDP サーバーにおける**ベストエフォート**機能です。トランスポート層がピアアドレスを常に公開するとは限りません。主要なセキュリティ機構には必ずチャレンジ・レスポンス認証を使用してください。

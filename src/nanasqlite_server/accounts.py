@@ -54,11 +54,13 @@ def _parse_ip_networks(
     if isinstance(entries, str):
         items = [s.strip() for s in entries.split(",") if s.strip()]
     else:
-        items = list(entries)
+        items = [str(i).strip() for i in entries]
 
     for item in items:
+        if not item:
+            continue
         try:
-            result.append(ipaddress.ip_network(str(item), strict=False))
+            result.append(ipaddress.ip_network(item, strict=False))
         except ValueError:
             logging.warning("Invalid IP/CIDR entry in account config, skipping: %r", item)
     return result

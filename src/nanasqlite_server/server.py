@@ -338,6 +338,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         self.account = None
         self.challenge = None
         self.client_ip = None
+        self._ip_allowed = True  # connection_made で更新される
         self.stream_buffers = defaultdict(bytearray)
         self.total_buffer_size = 0
         self.account_manager = account_manager
@@ -379,6 +380,8 @@ class NanaRpcProtocol(QuicConnectionProtocol):
 
         self.client_ip = addr or "unknown"
         logging.info(f"New connection from: {self.client_ip}")
+        # IP フィルタは接続確立時に一度だけ評価する
+        self._ip_allowed = is_ip_allowed(self.client_ip)
 
     def connection_lost(self, exc):
         """Clean up background tasks and KEM resources when connection is lost
@@ -396,7 +399,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         super().connection_lost(exc)
 
     def quic_event_received(self, event):
-        if not is_ip_allowed(self.client_ip):
+        if not self._ip_allowed:
             logging.warning(f"Connection rejected by IP filter: {self.client_ip}")
             self.close()
             return

@@ -30,13 +30,23 @@
 
 - **IP アドレスフィルタリング** (`--allow-ips` / `--block-ips` オプション):
   サーバー起動時に接続元 IP アドレスを CIDR 範囲で許可 or ブロックするオプションを追加しました。
+  **単一 IP アドレス**（`192.168.1.100`）と **IPv6**（`2001:db8::1`, `2001:db8::/32`, `::1`）にも対応しています。
 
   ```sh
   # 192.168.1.0/24 からの接続のみ許可
   nanasqlite-server --allow-ips "192.168.1.0/24"
 
+  # 単一 IP アドレスを許可（範囲なし）
+  nanasqlite-server --allow-ips "192.168.1.50"
+
   # 10.0.0.0/8 からの接続を拒否
   nanasqlite-server --block-ips "10.0.0.0/8"
+
+  # IPv6 の特定アドレスを許可
+  nanasqlite-server --allow-ips "2001:db8::1"
+
+  # IPv6 CIDR 範囲を許可
+  nanasqlite-server --allow-ips "2001:db8::/32"
 
   # 複数指定: カンマ区切り
   nanasqlite-server --allow-ips "192.168.1.0/24,10.0.0.1" --block-ips "192.168.1.100"

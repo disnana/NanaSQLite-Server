@@ -89,6 +89,32 @@ class TestParseIpNetworks:
         assert ipaddress.ip_address("127.0.0.1") in result[0]
         assert ipaddress.ip_address("127.1.2.3") in result[0]
 
+    def test_single_ipv6_address(self):
+        """単一 IPv6 アドレスは /128 として扱われる"""
+        result = self._fn(["2001:db8::1"])
+        assert len(result) == 1
+        assert ipaddress.ip_address("2001:db8::1") in result[0]
+        assert ipaddress.ip_address("2001:db8::2") not in result[0]
+
+    def test_ipv6_cidr_range(self):
+        """IPv6 CIDR 範囲"""
+        result = self._fn(["2001:db8::/32"])
+        assert len(result) == 1
+        assert ipaddress.ip_address("2001:db8::1") in result[0]
+        assert ipaddress.ip_address("2001:db9::1") not in result[0]
+
+    def test_loopback_ipv6(self):
+        """IPv6 ループバック ::1"""
+        result = self._fn(["::1"])
+        assert len(result) == 1
+        assert ipaddress.ip_address("::1") in result[0]
+        assert ipaddress.ip_address("::2") not in result[0]
+
+    def test_whitespace_stripping_in_list(self):
+        """リスト内の各エントリの空白を除去する"""
+        result = self._fn([" 192.168.1.1 ", "  10.0.0.1  "])
+        assert len(result) == 2
+
 
 # ---------------------------------------------------------------------------
 # ユニットテスト: is_ip_allowed
@@ -173,6 +199,24 @@ class TestIsIpAllowed:
     def test_unknown_ip_with_block_list(self):
         # IP不明かつ block リストあり → 許可 (フィルタをスキップ、認証に委ねる)
         assert self._call("unknown", block_list=["192.168.1.0/24"]) is True
+
+    # --- IPv6 ---
+    def test_ipv6_allow_list_permits(self):
+        """IPv6 アドレスが allow リストに含まれる場合は許可"""
+        assert self._call("2001:db8::1", allow_list=["2001:db8::/32"]) is True
+
+    def test_ipv6_allow_list_rejects_outside(self):
+        """IPv6 アドレスが allow リストに含まれない場合は拒否"""
+        assert self._call("2001:db9::1", allow_list=["2001:db8::/32"]) is False
+
+    def test_ipv6_block_list_rejects(self):
+        """IPv6 アドレスが block リストに含まれる場合は拒否"""
+        assert self._call("2001:db8::1", block_list=["2001:db8::1"]) is False
+
+    def test_ipv6_loopback_allow(self):
+        """IPv6 ループバック ::1 を allow リストで許可"""
+        assert self._call("::1", allow_list=["::1"]) is True
+        assert self._call("::2", allow_list=["::1"]) is False
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +416,7 @@ def ip_filter_server_block(tmp_path_factory):
 @pytest.mark.asyncio
 async def test_allow_list_permits_local_connection(ip_filter_server_allow):
     """--allow-ips 127.0.0.1 → 127.0.0.1 からの接続は AUTH_START まで到達できる"""
-    port, priv = ip_filter_server_allow
+    port, _priv = ip_filter_server_allow
     config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
 
     class MinimalClient(QuicConnectionProtocol):
@@ -520,3 +564,29 @@ class TestAccountIpFilter:
         assert acc.is_ip_allowed("10.0.0.1") is False
         assert acc.is_ip_allowed("10.0.0.2") is False
         assert acc.is_ip_allowed("10.0.0.3") is True
+
+    # --- IPv6 ---
+
+    def test_ipv6_single_address_allowed(self):
+        """単一 IPv6 アドレスを allowed_ips に指定できる"""
+        acc = self._make_account(allowed_ips=["2001:db8::1"])
+        assert acc.is_ip_allowed("2001:db8::1") is True
+        assert acc.is_ip_allowed("2001:db8::2") is False
+
+    def test_ipv6_cidr_allowed(self):
+        """IPv6 CIDR 範囲を allowed_ips に指定できる"""
+        acc = self._make_account(allowed_ips=["2001:db8::/32"])
+        assert acc.is_ip_allowed("2001:db8::1") is True
+        assert acc.is_ip_allowed("2001:db9::1") is False
+
+    def test_ipv6_single_address_blocked(self):
+        """単一 IPv6 アドレスを blocked_ips に指定できる"""
+        acc = self._make_account(blocked_ips=["2001:db8::bad"])
+        assert acc.is_ip_allowed("2001:db8::bad") is False
+        assert acc.is_ip_allowed("2001:db8::1") is True
+
+    def test_ipv6_loopback_blocked(self):
+        """IPv6 ループバック ::1 を blocked_ips に指定できる"""
+        acc = self._make_account(blocked_ips=["::1"])
+        assert acc.is_ip_allowed("::1") is False
+        assert acc.is_ip_allowed("::2") is True

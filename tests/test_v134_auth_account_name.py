@@ -327,7 +327,7 @@ def v134_server(tmp_path_factory, v134_keys):
 @pytest.mark.asyncio
 async def test_correct_account_name_auth_succeeds(v134_server):
     """正しいアカウント名 + 対応する鍵 → 認証成功 (正常ケース)"""
-    port, config_path, admin_key, admin_pub, user1_key, user1_pub, db_dir = v134_server
+    port, _config_path, _admin_key, _admin_pub, user1_key, _user1_pub, _db_dir = v134_server
 
     client = RemoteNanaSQLite(host="127.0.0.1", port=port, verify_ssl=False)
     client.private_key = user1_key
@@ -342,7 +342,7 @@ async def test_correct_account_name_auth_succeeds(v134_server):
 @pytest.mark.asyncio
 async def test_wrong_account_name_auth_fails(v134_server):
     """誤ったアカウント名 + 有効な鍵 → 認証失敗"""
-    port, config_path, admin_key, admin_pub, user1_key, user1_pub, db_dir = v134_server
+    port, _config_path, _admin_key, _admin_pub, user1_key, _user1_pub, _db_dir = v134_server
 
     # user1 のキーを持ちながら "admin" を名乗って接続を試みる
     client = RemoteNanaSQLite(host="127.0.0.1", port=port, verify_ssl=False)
@@ -357,7 +357,7 @@ async def test_wrong_account_name_auth_fails(v134_server):
 @pytest.mark.asyncio
 async def test_nonexistent_account_name_auth_fails(v134_server):
     """存在しないアカウント名 + 有効な鍵 → 認証失敗"""
-    port, config_path, admin_key, admin_pub, user1_key, user1_pub, db_dir = v134_server
+    port, _config_path, _admin_key, _admin_pub, user1_key, _user1_pub, _db_dir = v134_server
 
     client = RemoteNanaSQLite(host="127.0.0.1", port=port, verify_ssl=False)
     client.private_key = user1_key
@@ -371,7 +371,7 @@ async def test_nonexistent_account_name_auth_fails(v134_server):
 @pytest.mark.asyncio
 async def test_no_account_name_auth_succeeds_by_linear_search(v134_server):
     """account_name 未指定 + 有効な鍵 → 線形探索で認証成功 (後方互換性)"""
-    port, config_path, admin_key, admin_pub, user1_key, user1_pub, db_dir = v134_server
+    port, _config_path, _admin_key, _admin_pub, user1_key, _user1_pub, _db_dir = v134_server
 
     client = RemoteNanaSQLite(host="127.0.0.1", port=port, verify_ssl=False)
     client.private_key = user1_key
