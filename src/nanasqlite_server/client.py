@@ -2,8 +2,10 @@ import asyncio
 import base64
 import builtins
 import json
+import os
 import secrets
 import ssl
+import sys
 from typing import TYPE_CHECKING
 
 import nanasqlite.exceptions as nana_exc
@@ -25,13 +27,22 @@ if TYPE_CHECKING:
 else:
     Base = object
 
+# Windows: etc/oqs.dll を DLL 検索パスに追加して liboqs の自動インストールをバイパス
+if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+    _etc_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "etc",
+    )
+    if os.path.isfile(os.path.join(_etc_dir, "oqs.dll")):
+        os.add_dll_directory(_etc_dir)
+
 # liboqs-python サポート (オプション: pip install liboqs-python)
 # 耐量子暗号 (PQC) による認証署名を有効にする
 try:
     import oqs  # type: ignore[import]
 
     HAS_OQS = True
-except (ImportError, SystemExit):
+except (ImportError, PermissionError, SystemExit):
     oqs = None  # type: ignore[assignment]
     HAS_OQS = False
 
