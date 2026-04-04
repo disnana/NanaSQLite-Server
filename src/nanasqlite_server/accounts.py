@@ -1,10 +1,11 @@
 import base64
+import ipaddress
 import json
 import os
 import sys
 import logging
 import asyncio
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set, Union
 from cryptography.hazmat.primitives import serialization
 
 # watchfiles が環境にない場合のフォールバック（CI安定性のため）
@@ -48,6 +49,8 @@ class Account:
         forbidden_methods=None,
         allowed_dbs=None,
         read_only=False,
+        allowed_ips=None,
+        blocked_ips=None,
     ):
         self.name = name
         self.public_key_pem = public_key_pem
@@ -77,7 +80,57 @@ class Account:
                 for db, tables in allowed_dbs.items()
             }
 
-        key_str = (
+        # アカウントごとの IP フィルター (サーバーレベルの IP フィルターとは独立)
+        # None / 空リスト → 制限なし
+        self._allowed_ip_networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = (
+            _parse_ip_networks(allowed_ips) if allowed_ips else []
+        )
+        self._blocked_ip_networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = (
+            _parse_ip_networks(blocked_ips) if blocked_ips else []
+        )
+    def is_ip_allowed(self, ip_str: str) -> bool:
+        """このアカウントに対して接続元 IP がアクセス許可されているか確認する。
+
+        判定ルール:
+        1. IP 不明 ("unknown") → スキップして認証に委ねる
+        2. blocked_ips に含まれる → 拒否
+        3. allowed_ips が設定されており含まれない → 拒否
+        4. その他 → 許可
+
+        Args:
+            ip_str: 接続元 IP アドレス文字列または "unknown"
+
+        Returns:
+            True = 許可 / False = 拒否
+        """
+        # アカウントレベルのフィルターが設定されていない場合は許可
+        if not self._allowed_ip_networks and not self._blocked_ip_networks:
+            return True
+
+        if ip_str == "unknown":
+            return True
+
+        try:
+            addr = ipaddress.ip_address(ip_str)
+        except ValueError:
+            logging.warning("Account IP check: could not parse IP %r for account %s", ip_str, self.name)
+            return True
+
+        # blocked_ips チェック
+        for net in self._blocked_ip_networks:
+            if addr in net:
+                return False
+
+        # allowed_ips チェック (空 = 制限なし)
+        if self._allowed_ip_networks:
+            for net in self._allowed_ip_networks:
+                if addr in net:
+                    return True
+            return False
+
+        return True
+
+
             public_key_pem.decode()
             if isinstance(public_key_pem, bytes)
             else public_key_pem

@@ -20,13 +20,16 @@ import time
 import ipaddress
 import pytest
 
-from aioquic.asyncio import connect
+from aioquic.asyncio import connect, QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.events import StreamDataReceived
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
+from nanasqlite_server import protocol as proto
 from nanasqlite_server.cert_gen import generate_certificate
 from nanasqlite_server.key_gen import generate_keys
+import nanasqlite_server.server as _srv_module
 
 
 # ---------------------------------------------------------------------------
@@ -97,18 +100,16 @@ class TestIsIpAllowed:
     """is_ip_allowed のユニットテスト"""
 
     def _call(self, ip_str, allow_list=None, block_list=None):
-        import nanasqlite_server.server as srv
         # グローバルをテスト用に差し替える
-        from nanasqlite_server.server import parse_ip_networks
-        orig_allow = srv._ip_allow_list
-        orig_block = srv._ip_block_list
+        orig_allow = _srv_module._ip_allow_list
+        orig_block = _srv_module._ip_block_list
         try:
-            srv._ip_allow_list = parse_ip_networks(allow_list or [])
-            srv._ip_block_list = parse_ip_networks(block_list or [])
-            return srv.is_ip_allowed(ip_str)
+            _srv_module._ip_allow_list = _srv_module.parse_ip_networks(allow_list or [])
+            _srv_module._ip_block_list = _srv_module.parse_ip_networks(block_list or [])
+            return _srv_module.is_ip_allowed(ip_str)
         finally:
-            srv._ip_allow_list = orig_allow
-            srv._ip_block_list = orig_block
+            _srv_module._ip_allow_list = orig_allow
+            _srv_module._ip_block_list = orig_block
 
     # --- フィルタなし (デフォルト) ---
     def test_no_filter_allows_all(self):
@@ -375,11 +376,6 @@ async def test_allow_list_permits_local_connection(ip_filter_server_allow):
     port, priv = ip_filter_server_allow
     config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
 
-    from nanasqlite_server import protocol as proto
-    import asyncio
-    from aioquic.asyncio import QuicConnectionProtocol
-    from aioquic.quic.events import StreamDataReceived
-
     class MinimalClient(QuicConnectionProtocol):
         def __init__(self, *a, **kw):
             super().__init__(*a, **kw)
@@ -407,11 +403,6 @@ async def test_block_list_does_not_affect_non_blocked_ip(ip_filter_server_block)
     """--block-ips 192.0.2.0/24 → 127.0.0.1 からは接続・認証できる"""
     port, priv = ip_filter_server_block
     config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
-
-    from nanasqlite_server import protocol as proto
-    import asyncio
-    from aioquic.asyncio import QuicConnectionProtocol
-    from aioquic.quic.events import StreamDataReceived
 
     class MinimalClient(QuicConnectionProtocol):
         def __init__(self, *a, **kw):

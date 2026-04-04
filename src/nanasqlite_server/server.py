@@ -9,7 +9,7 @@ import signal
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
-from typing import List, Optional, Union
+from typing import List, Union
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived
