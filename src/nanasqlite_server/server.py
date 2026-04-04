@@ -28,11 +28,13 @@ except ImportError:  # pragma: no cover
 
 # liboqs-python サポート (オプション: pip install liboqs-python)
 # PQC KEM セッション鍵交換による通信保護を有効にする
+# PermissionError を捕捉するのは、Windows + Python 3.13 環境で liboqs 自動インストール失敗時に
+# テンポラリディレクトリのクリーンアップが PermissionError を送出しサーバーが落ちる問題を防ぐため
 try:
     import oqs  # type: ignore[import]
 
     HAS_OQS = True
-except (ImportError, SystemExit):
+except (ImportError, PermissionError, SystemExit):
     oqs = None  # type: ignore[assignment]
     HAS_OQS = False
 
