@@ -164,9 +164,9 @@ class TestWriteMethodsConstant:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def test_keys_v133():
-    """テスト用の Ed25519 鍵ペア"""
+    """テスト用の Ed25519 鍵ペア (モジュール全体で1回生成)"""
     private_key = ed25519.Ed25519PrivateKey.generate()
     public_key = private_key.public_key()
     pub_bytes = public_key.public_bytes(
@@ -176,10 +176,11 @@ def test_keys_v133():
     return private_key, pub_bytes
 
 
-@pytest.fixture
-async def v133_server(tmp_path, test_keys_v133):
-    """v1.3.3 テスト用の専用サーバー"""
+@pytest.fixture(scope="module")
+def v133_server(tmp_path_factory, test_keys_v133):
+    """v1.3.3 テスト用の専用サーバー (モジュール全体で1回起動)"""
     priv, pub = test_keys_v133
+    tmp_path = tmp_path_factory.mktemp("v133")
     db_dir = str(tmp_path)
     config_path = tmp_path / "accounts.json"
 
@@ -230,20 +231,32 @@ async def v133_server(tmp_path, test_keys_v133):
             cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True, **kwargs
         )
 
-        async def wait_for_quic():
-            config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
-            start_wait = time.time()
+        # 同期的にサーバー起動を待つ (module-scoped fixture では asyncio を使えないため)
+        quic_config = QuicConfiguration(is_client=True, verify_mode=ssl.CERT_NONE)
+        start_wait = time.time()
+        server_ready = False
+        loop = asyncio.new_event_loop()
+        try:
             while time.time() - start_wait < 60.0:
                 if proc.poll() is not None:
-                    return False
-                try:
-                    async with connect("127.0.0.1", port, configuration=config):
-                        return True
-                except Exception:
-                    await asyncio.sleep(1.0)
-            return False
+                    break
 
-        if not await wait_for_quic():
+                async def _check():
+                    try:
+                        async with connect("127.0.0.1", port, configuration=quic_config):
+                            return True
+                    except Exception:
+                        return False
+
+                result = loop.run_until_complete(_check())
+                if result:
+                    server_ready = True
+                    break
+                time.sleep(1.0)
+        finally:
+            loop.close()
+
+        if not server_ready:
             log_file.close()
             with open(log_file_path, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -444,3 +457,121 @@ async def test_backward_compat_list_allowed_dbs(v133_server):
         assert result == "compat_value"
     finally:
         await client.close()
+
+
+# ---------------------------------------------------------------------------
+# ユニットテスト: エラー情報隠蔽 (AttributeError/TypeError → InternalServerError)
+# ---------------------------------------------------------------------------
+
+
+class TestErrorHiding:
+    """handle_request での内部エラー隠蔽テスト"""
+
+    def _make_protocol(self):
+        """テスト用の NanaRpcProtocol インスタンスを作成する"""
+        from unittest.mock import MagicMock
+        from nanasqlite_server.server import NanaRpcProtocol
+
+        account_manager = MagicMock()
+        quic = MagicMock()
+        quic.get_next_available_stream_id.return_value = 0
+        protocol = NanaRpcProtocol.__new__(NanaRpcProtocol)
+        protocol.authenticated = True
+        protocol.account = MagicMock()
+        protocol.account.name = "test_user"
+        protocol.account_manager = account_manager
+        protocol.last_db_name = "test.sqlite"
+        protocol.pqc_session_key = None
+        protocol._quic = quic
+        protocol._background_tasks = set()
+        protocol._kem_instance = None
+        protocol.client_ip = "127.0.0.1"
+        return protocol
+
+    def _make_rpc_payload(self):
+        """有効な RPC リクエストのエンコード済みバイト列を返す"""
+        from nanasqlite_server import protocol as proto
+        return proto.encode_message({"method": "list_tables", "args": [], "kwargs": {}})
+
+    @pytest.mark.asyncio
+    async def test_attribute_error_returns_internal_server_error(self):
+        """AttributeError は InternalServerError として返され、詳細は露出しない"""
+        from unittest.mock import patch, AsyncMock
+
+        protocol = self._make_protocol()
+
+        sent_responses = []
+
+        def capture_send(stream_id, data):
+            sent_responses.append(data)
+
+        protocol._send_response = capture_send
+
+        with patch.object(
+            protocol,
+            "execute_rpc",
+            new=AsyncMock(side_effect=AttributeError("secret internal detail")),
+        ):
+            await protocol.handle_request(0, self._make_rpc_payload())
+
+        assert len(sent_responses) == 1
+        resp = sent_responses[0]
+        assert isinstance(resp, dict)
+        assert resp.get("error_type") == "InternalServerError"
+        assert "secret internal detail" not in resp.get("message", "")
+        assert resp.get("message") == "Internal Server Error"
+
+    @pytest.mark.asyncio
+    async def test_type_error_returns_internal_server_error(self):
+        """TypeError は InternalServerError として返され、詳細は露出しない"""
+        from unittest.mock import patch, AsyncMock
+
+        protocol = self._make_protocol()
+
+        sent_responses = []
+
+        def capture_send(stream_id, data):
+            sent_responses.append(data)
+
+        protocol._send_response = capture_send
+
+        with patch.object(
+            protocol,
+            "execute_rpc",
+            new=AsyncMock(side_effect=TypeError("unexpected type info")),
+        ):
+            await protocol.handle_request(0, self._make_rpc_payload())
+
+        assert len(sent_responses) == 1
+        resp = sent_responses[0]
+        assert isinstance(resp, dict)
+        assert resp.get("error_type") == "InternalServerError"
+        assert "unexpected type info" not in resp.get("message", "")
+        assert resp.get("message") == "Internal Server Error"
+
+    @pytest.mark.asyncio
+    async def test_permission_error_message_is_returned_to_client(self):
+        """PermissionError のメッセージはそのままクライアントに返される"""
+        from unittest.mock import patch, AsyncMock
+
+        protocol = self._make_protocol()
+
+        sent_responses = []
+
+        def capture_send(stream_id, data):
+            sent_responses.append(data)
+
+        protocol._send_response = capture_send
+
+        with patch.object(
+            protocol,
+            "execute_rpc",
+            new=AsyncMock(side_effect=PermissionError("access denied for user")),
+        ):
+            await protocol.handle_request(0, self._make_rpc_payload())
+
+        assert len(sent_responses) == 1
+        resp = sent_responses[0]
+        assert isinstance(resp, dict)
+        assert resp.get("error_type") == "PermissionError"
+        assert "access denied for user" in resp.get("message", "")

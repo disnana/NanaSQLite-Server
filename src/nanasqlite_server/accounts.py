@@ -3,6 +3,7 @@ import json
 import os
 import logging
 import asyncio
+from typing import Dict, Optional, Set
 from cryptography.hazmat.primitives import serialization
 
 # watchfiles が環境にない場合のフォールバック（CI安定性のため）
@@ -53,9 +54,9 @@ class Account:
         #   ["db1.sqlite", "db2.sqlite"]  → 後方互換: 各DBに対し全テーブル許可
         #   {"db1.sqlite": None, "db2.sqlite": ["t1", "t2"]}
         #                                 → DB毎にテーブルを制限 (None=全テーブル許可)
-        # 内部では常に dict[str, set[str] | None] として保持する
+        # 内部では常に Optional[Dict[str, Optional[Set[str]]]] として保持する
         if allowed_dbs is None:
-            self.allowed_dbs: dict[str, set[str] | None] | None = None
+            self.allowed_dbs: Optional[Dict[str, Optional[Set[str]]]] = None
         elif isinstance(allowed_dbs, list):
             # 後方互換: リスト → 全テーブル許可の辞書に変換
             self.allowed_dbs = {db: None for db in allowed_dbs}
