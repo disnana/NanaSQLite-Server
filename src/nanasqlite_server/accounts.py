@@ -240,14 +240,14 @@ class AccountManager:
             for acc_data in data.get("accounts", []):
                 new_accounts.append(
                     Account(
-                        acc_data["name"],
-                        acc_data["public_key"],
-                        acc_data.get("allowed_methods"),
-                        acc_data.get("forbidden_methods"),
-                        acc_data.get("allowed_dbs"),
-                        acc_data.get("read_only", False),
-                        acc_data.get("allowed_ips"),
-                        acc_data.get("blocked_ips"),
+                        name=acc_data["name"],
+                        public_key=acc_data["public_key"],
+                        allowed_methods=acc_data.get("allowed_methods"),
+                        forbidden_methods=acc_data.get("forbidden_methods"),
+                        allowed_dbs=acc_data.get("allowed_dbs"),
+                        read_only=acc_data.get("read_only", False),
+                        allowed_ips=acc_data.get("allowed_ips"),
+                        blocked_ips=acc_data.get("blocked_ips"),
                     )
                 )
 
