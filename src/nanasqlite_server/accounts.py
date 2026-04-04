@@ -290,14 +290,18 @@ class AccountManager:
 
     def find_account_by_signature(self, signature, challenge, account_name_hint=None):
         """署名を検証して、対応するアカウントを返す"""
-        # アカウント名のヒントがある場合は、まずそのアカウントを検証 (CPU負荷軽減)
+        # アカウント名のヒントがある場合は、指定されたアカウントのみを検証する (厳格モード)
+        # ヒントが不正 (アカウント不存在または署名不一致) な場合は None を返し、
+        # 他のアカウントへのフォールバックは行わない。
+        # これにより「誤ったアカウント名だが正しいキーで認証が通る」問題を防ぐ。
         if account_name_hint:
             account = self.find_account_by_name(account_name_hint)
-            if account:
-                if self._verify_account_signature(account, signature, challenge):
-                    return account
+            if account and self._verify_account_signature(account, signature, challenge):
+                return account
+            # ヒントが指定されたが一致しなかった → 認証失敗 (フォールバックなし)
+            return None
 
-        # 線形探索 (後方互換性)
+        # ヒントなし: 線形探索 (後方互換性)
         for account in self.accounts:
             if self._verify_account_signature(account, signature, challenge):
                 return account
