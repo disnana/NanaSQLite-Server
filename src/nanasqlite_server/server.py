@@ -116,6 +116,23 @@ FORBIDDEN_METHODS = {
     "add_hook",
 }
 
+# read_only アカウントで禁止するメソッド (データを変更・削除するメソッド)
+WRITE_METHODS = {
+    "__setitem__",
+    "__delitem__",
+    "set",
+    "delete",
+    "batch_update",
+    "batch_update_partial",
+    "batch_delete",
+    "clear",
+    "import_from_dict_list",
+    "upsert",
+    "flush",
+    "retry_dlq",
+    "clear_dlq",
+}
+
 # AsyncNanaSQLite の特殊メソッドマッピング (--async-mode 用)
 # NanaSQLite の __dunder__ メソッドを AsyncNanaSQLite の対応する非同期メソッドに変換する
 ASYNC_SPECIAL_METHOD_MAP: dict[str, str] = {
@@ -125,11 +142,6 @@ ASYNC_SPECIAL_METHOD_MAP: dict[str, str] = {
     "__contains__": "acontains",
     "__len__": "alen",
 }
-
-# ホワイトリスト形式ではなく、全DB操作をexecutorで実行するように変更するため
-# 旧来のWRITE_METHODSは削除
-
-
 def is_banned(ip):
     """IPがBANされているか確認し、期限切れのBANを掃除する"""
     # テスト時など、BAN機能を無効化する場合
@@ -416,7 +428,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                         self.account = account
                         # 認証時にデフォルトDBを設定（あれば）
                         if account.allowed_dbs:
-                            self.last_db_name = sorted(list(account.allowed_dbs))[0]
+                            self.last_db_name = sorted(account.allowed_dbs.keys())[0]
                         else:
                             # アカウントごとの制限がない場合は、サーバー全体のデフォルトDBを使用
                             global _db_path
@@ -552,16 +564,25 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         except (
             PermissionError,
             ValueError,
-            AttributeError,
             RuntimeError,
             KeyError,
-            TypeError,
             NanaSQLiteError,
         ) as e:
-            # クライアントに返しても安全なエラー (NanaSQLiteErrorを追加)
+            # クライアントに返しても安全なエラー
             self._send_response(
                 stream_id,
                 {"status": "error", "error_type": type(e).__name__, "message": str(e)},
+            )
+        except (AttributeError, TypeError) as e:
+            # サーバー内部エラー (不正なメソッド呼び出し等): 詳細を隠蔽してログに記録
+            logging.error(f"Internal error ({type(e).__name__}) handling request: {e}")
+            self._send_response(
+                stream_id,
+                {
+                    "status": "error",
+                    "error_type": "InternalServerError",
+                    "message": "Internal Server Error",
+                },
             )
         except Exception as e:
             # 予期しないエラーは詳細を隠す (情報漏洩対策)
@@ -571,7 +592,7 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 {
                     "status": "error",
                     "error_type": "InternalServerError",
-                    "message": "An unexpected error occurred",
+                    "message": "Internal Server Error",
                 },
             )
 
@@ -603,6 +624,16 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                 raise PermissionError(
                     f"Access to database '{target_db_name}' is not allowed for account '{current_account.name}'"
                 )
+            # テーブルレベルの制限チェック
+            allowed_tables = current_account.allowed_dbs[target_db_name]
+            if allowed_tables is not None:
+                # kwargs からテーブル名を取得する (明示的に指定された場合のみ検査)
+                table_name = kwargs.get("table_name") if isinstance(kwargs, dict) else None
+                if table_name is not None and table_name not in allowed_tables:
+                    raise PermissionError(
+                        f"Access to table '{table_name}' in database '{target_db_name}' "
+                        f"is not allowed for account '{current_account.name}'"
+                    )
 
         # パスの安全性を検証し、絶対パスを取得
         full_db_path = validate_db_path(self.account_manager.db_dir, target_db_name)
@@ -611,6 +642,12 @@ class NanaRpcProtocol(QuicConnectionProtocol):
         # 2. メソッド実行権限の更新・確認
         allowed_methods = current_account.allowed_methods
         forbidden_methods = current_account.forbidden_methods
+
+        # read_only アカウントは書き込み系メソッドを呼び出せない
+        if current_account.read_only and method_name in WRITE_METHODS:
+            raise PermissionError(
+                f"Method '{method_name}' is not allowed for read-only account '{current_account.name}'"
+            )
 
         if allowed_methods is not None:
             if method_name not in allowed_methods:

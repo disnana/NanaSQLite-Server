@@ -1,5 +1,59 @@
 # 更新履歴 (CHANGELOG)
 
+## [1.3.3] - 2026-04-04
+
+### RBAC 強化・エラー情報の隠蔽・CI 修正
+
+#### 新機能 (New Features)
+
+- **一括 Read-Only 設定** (`read_only` フラグ):
+  `accounts.json` のアカウント設定に `"read_only": true` を追加するだけで、データを変更・削除する全メソッド (`__setitem__`, `__delitem__`, `set`, `delete`, `batch_update`, `batch_update_partial`, `batch_delete`, `clear`, `upsert`, `import_from_dict_list`, `flush`, `retry_dlq`, `clear_dlq`) を一括で禁止できます。
+  `WRITE_METHODS` 定数として `server.py` に定義しており、`PermissionError` を返します。
+  例:
+  ```json
+  {
+    "name": "viewer",
+    "public_key": "ssh-ed25519 ...",
+    "read_only": true
+  }
+  ```
+
+- **DB 名に紐づくテーブル名の動的制限** (拡張 `allowed_dbs`):
+  `allowed_dbs` に辞書形式を指定することで、DB ごとにアクセス可能なテーブルを制限できます。
+  後方互換として、従来通りのリスト形式 (`["db.sqlite"]`) も引き続きサポートします（内部で自動変換）。
+  例:
+  ```json
+  {
+    "name": "limited_user",
+    "public_key": "ssh-ed25519 ...",
+    "allowed_dbs": {
+      "logs.sqlite": null,
+      "data.sqlite": ["public_info", "stats"]
+    }
+  }
+  ```
+
+#### セキュリティ修正 (Security Fixes)
+
+- **エラー情報の隠蔽強化**: `handle_request` のエラーハンドリングを改修。
+  - クライアント起因の正当なエラー (`ValueError`, `PermissionError`, `RuntimeError`, `KeyError`, `NanaSQLiteError`) はそのままクライアントに返します。
+  - サーバー内部のエラー (`AttributeError`, `TypeError`) は汎用メッセージ (`"Internal Server Error"`) に置き換え、詳細はサーバーログにのみ記録します。これにより、不正なメソッド呼び出しによる内部実装の漏洩を防ぎます。
+
+#### バグ修正 (Bug Fixes)
+
+- **CI 修正**: テスト実行コマンドに `--cov` / `-n auto` フラグを使用しているにもかかわらず `pytest-cov` / `pytest-xdist` がインストールされていなかった問題を修正。`pyproject.toml` の `[dev]` 依存に `pytest-cov` と `pytest-xdist` を追加しました。
+
+#### テスト (Tests)
+
+- `tests/test_v133_features.py` を追加:
+  - `Account` / `AccountManager` の `read_only` / `allowed_dbs` 変換のユニットテスト (14 件)。
+  - `WRITE_METHODS` 定数の検証テスト (2 件)。
+  - `read_only` アカウントが書き込みを拒否し読み取りは許可する統合テスト (2 件)。
+  - `allowed_dbs` 辞書形式によるテーブル制限の統合テスト (2 件)。
+  - `allowed_dbs` リスト形式の後方互換性テスト (1 件)。
+
+---
+
 ## [1.3.2] - 2026-04-04
 ### 耐量子暗号 (PQC) 認証失敗の修正
 耐量子暗号 (PQC) 認証におけるロジックの修正
