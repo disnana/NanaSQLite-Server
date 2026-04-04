@@ -388,10 +388,7 @@ class AccountManager:
             return None
 
         # ヒントなし: 線形探索 (後方互換性)
-        logging.warning(
-            "安全性のためv1.4.xでは無効にされます。"
+        logging.error(
+            "安全性のためv1.4.xではアカウント指定がない場合の線形検索が無効されました。"
         )
-        for account in self.accounts:
-            if self._verify_account_signature(account, signature, challenge):
-                return account
         return None
