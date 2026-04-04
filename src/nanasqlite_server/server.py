@@ -158,7 +158,11 @@ ASYNC_SPECIAL_METHOD_MAP: dict[str, str] = {
     "__contains__": "acontains",
     "__len__": "alen",
 }
-def parse_ip_networks(entries: List[str]) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
+
+
+def parse_ip_networks(
+    entries: List[str],
+) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
     """IP アドレス・CIDR 表記の文字列リストを Network オブジェクトに変換する。
 
     個々のIPアドレス ("192.168.1.1") はホスト CIDR として扱う。
