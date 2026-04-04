@@ -40,6 +40,30 @@ except (ImportError, PermissionError, SystemExit):
 OQS_KEY_PREFIX = "oqs-"
 
 
+def _parse_ip_networks(
+    entries,
+) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
+    """文字列リスト（またはカンマ区切り文字列）を ip_network オブジェクトのリストに変換する。
+
+    無効なエントリはスキップしてログに記録する。
+    """
+    result: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = []
+    if not entries:
+        return result
+
+    if isinstance(entries, str):
+        items = [s.strip() for s in entries.split(",") if s.strip()]
+    else:
+        items = list(entries)
+
+    for item in items:
+        try:
+            result.append(ipaddress.ip_network(str(item), strict=False))
+        except ValueError:
+            logging.warning("Invalid IP/CIDR entry in account config, skipping: %r", item)
+    return result
+
+
 class Account:
     def __init__(
         self,
@@ -82,55 +106,14 @@ class Account:
 
         # アカウントごとの IP フィルター (サーバーレベルの IP フィルターとは独立)
         # None / 空リスト → 制限なし
-        self._allowed_ip_networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = (
-            _parse_ip_networks(allowed_ips) if allowed_ips else []
-        )
-        self._blocked_ip_networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = (
-            _parse_ip_networks(blocked_ips) if blocked_ips else []
-        )
-    def is_ip_allowed(self, ip_str: str) -> bool:
-        """このアカウントに対して接続元 IP がアクセス許可されているか確認する。
+        self._allowed_ip_networks: List[
+            Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
+        ] = _parse_ip_networks(allowed_ips)
+        self._blocked_ip_networks: List[
+            Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
+        ] = _parse_ip_networks(blocked_ips)
 
-        判定ルール:
-        1. IP 不明 ("unknown") → スキップして認証に委ねる
-        2. blocked_ips に含まれる → 拒否
-        3. allowed_ips が設定されており含まれない → 拒否
-        4. その他 → 許可
-
-        Args:
-            ip_str: 接続元 IP アドレス文字列または "unknown"
-
-        Returns:
-            True = 許可 / False = 拒否
-        """
-        # アカウントレベルのフィルターが設定されていない場合は許可
-        if not self._allowed_ip_networks and not self._blocked_ip_networks:
-            return True
-
-        if ip_str == "unknown":
-            return True
-
-        try:
-            addr = ipaddress.ip_address(ip_str)
-        except ValueError:
-            logging.warning("Account IP check: could not parse IP %r for account %s", ip_str, self.name)
-            return True
-
-        # blocked_ips チェック
-        for net in self._blocked_ip_networks:
-            if addr in net:
-                return False
-
-        # allowed_ips チェック (空 = 制限なし)
-        if self._allowed_ip_networks:
-            for net in self._allowed_ip_networks:
-                if addr in net:
-                    return True
-            return False
-
-        return True
-
-
+        key_str = (
             public_key_pem.decode()
             if isinstance(public_key_pem, bytes)
             else public_key_pem
@@ -163,6 +146,52 @@ class Account:
             except Exception as e:
                 logging.error(f"Failed to load public key for account {name}: {e}")
                 self.public_key = None
+
+    def is_ip_allowed(self, ip_str: str) -> bool:
+        """このアカウントに対して接続元 IP がアクセス許可されているか確認する。
+
+        判定ルール:
+        1. IP 不明 ("unknown") → スキップして認証に委ねる
+        2. blocked_ips に含まれる → 拒否
+        3. allowed_ips が設定されており含まれない → 拒否
+        4. その他 → 許可
+
+        Args:
+            ip_str: 接続元 IP アドレス文字列または "unknown"
+
+        Returns:
+            True = 許可 / False = 拒否
+        """
+        # アカウントレベルのフィルターが設定されていない場合は許可
+        if not self._allowed_ip_networks and not self._blocked_ip_networks:
+            return True
+
+        if ip_str == "unknown":
+            return True
+
+        try:
+            addr = ipaddress.ip_address(ip_str)
+        except ValueError:
+            logging.warning(
+                "Account IP check: could not parse IP %r for account %s",
+                ip_str,
+                self.name,
+            )
+            return True
+
+        # blocked_ips チェック
+        for net in self._blocked_ip_networks:
+            if addr in net:
+                return False
+
+        # allowed_ips チェック (空 = 制限なし)
+        if self._allowed_ip_networks:
+            for net in self._allowed_ip_networks:
+                if addr in net:
+                    return True
+            return False
+
+        return True
 
 
 class AccountManager:
@@ -215,6 +244,8 @@ class AccountManager:
                         acc_data.get("forbidden_methods"),
                         acc_data.get("allowed_dbs"),
                         acc_data.get("read_only", False),
+                        acc_data.get("allowed_ips"),
+                        acc_data.get("blocked_ips"),
                     )
                 )
 

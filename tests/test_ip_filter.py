@@ -41,8 +41,7 @@ class TestParseIpNetworks:
     """parse_ip_networks のユニットテスト"""
 
     def _fn(self, entries):
-        from nanasqlite_server.server import parse_ip_networks
-        return parse_ip_networks(entries)
+        return _srv_module.parse_ip_networks(entries)
 
     def test_empty_list(self):
         assert self._fn([]) == []
@@ -429,3 +428,95 @@ async def test_block_list_does_not_affect_non_blocked_ip(ip_filter_server_block)
         sig = priv.sign(challenge)
         result = await client.send({"type": "response", "data": sig})
         assert result == "AUTH_OK"
+
+# ---------------------------------------------------------------------------
+# ユニットテスト: Account.is_ip_allowed (アカウントレベルの IP フィルター)
+# ---------------------------------------------------------------------------
+
+
+class TestAccountIpFilter:
+    """Account.is_ip_allowed のユニットテスト"""
+
+    def _make_account(self, allowed_ips=None, blocked_ips=None):
+        from nanasqlite_server.accounts import Account
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        priv = ed25519.Ed25519PrivateKey.generate()
+        pub = (
+            priv.public_key()
+            .public_bytes(
+                encoding=serialization.Encoding.OpenSSH,
+                format=serialization.PublicFormat.OpenSSH,
+            )
+            .decode()
+        )
+        return Account("test", pub, allowed_ips=allowed_ips, blocked_ips=blocked_ips)
+
+    # --- フィルターなし ---
+
+    def test_no_filter_allows_all(self):
+        acc = self._make_account()
+        assert acc.is_ip_allowed("192.168.1.1") is True
+
+    def test_no_filter_allows_unknown(self):
+        acc = self._make_account()
+        assert acc.is_ip_allowed("unknown") is True
+
+    # --- blocked_ips ---
+
+    def test_blocked_ip_rejects(self):
+        acc = self._make_account(blocked_ips=["10.0.0.1"])
+        assert acc.is_ip_allowed("10.0.0.1") is False
+
+    def test_blocked_cidr_rejects(self):
+        acc = self._make_account(blocked_ips=["10.0.0.0/8"])
+        assert acc.is_ip_allowed("10.1.2.3") is False
+
+    def test_blocked_cidr_allows_outside(self):
+        acc = self._make_account(blocked_ips=["10.0.0.0/8"])
+        assert acc.is_ip_allowed("192.168.1.1") is True
+
+    def test_blocked_unknown_ip_still_allowed(self):
+        acc = self._make_account(blocked_ips=["10.0.0.1"])
+        assert acc.is_ip_allowed("unknown") is True
+
+    # --- allowed_ips ---
+
+    def test_allowed_ip_permits(self):
+        acc = self._make_account(allowed_ips=["192.168.1.0/24"])
+        assert acc.is_ip_allowed("192.168.1.50") is True
+
+    def test_allowed_ip_rejects_outside(self):
+        acc = self._make_account(allowed_ips=["192.168.1.0/24"])
+        assert acc.is_ip_allowed("10.0.0.1") is False
+
+    def test_allowed_unknown_ip_still_allowed(self):
+        acc = self._make_account(allowed_ips=["192.168.1.0/24"])
+        assert acc.is_ip_allowed("unknown") is True
+
+    # --- blocked 優先 ---
+
+    def test_block_takes_precedence_over_allow(self):
+        acc = self._make_account(
+            allowed_ips=["192.168.1.0/24"], blocked_ips=["192.168.1.100"]
+        )
+        assert acc.is_ip_allowed("192.168.1.100") is False
+
+    def test_allow_not_in_block_permits(self):
+        acc = self._make_account(
+            allowed_ips=["192.168.1.0/24"], blocked_ips=["192.168.1.100"]
+        )
+        assert acc.is_ip_allowed("192.168.1.50") is True
+
+    # --- カンマ区切り文字列形式 ---
+
+    def test_comma_separated_allowed_ips(self):
+        acc = self._make_account(allowed_ips="10.0.0.1,192.168.1.1")
+        assert acc.is_ip_allowed("10.0.0.1") is True
+        assert acc.is_ip_allowed("192.168.1.1") is True
+        assert acc.is_ip_allowed("172.16.0.1") is False
+
+    def test_comma_separated_blocked_ips(self):
+        acc = self._make_account(blocked_ips="10.0.0.1,10.0.0.2")
+        assert acc.is_ip_allowed("10.0.0.1") is False
+        assert acc.is_ip_allowed("10.0.0.2") is False
+        assert acc.is_ip_allowed("10.0.0.3") is True

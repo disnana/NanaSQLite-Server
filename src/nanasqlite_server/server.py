@@ -510,6 +510,15 @@ class NanaRpcProtocol(QuicConnectionProtocol):
                     )
 
                     if account:
+                        # アカウントレベルの IP 制限チェック
+                        if not account.is_ip_allowed(self.client_ip):
+                            logging.warning(
+                                f"Authentication rejected by account-level IP filter: "
+                                f"{self.client_ip} (Account: {account.name})"
+                            )
+                            self._send_response(stream_id, "AUTH_FAILED")
+                            return
+
                         self.authenticated = True
                         self.account = account
                         # 認証時にデフォルトDBを設定（あれば）

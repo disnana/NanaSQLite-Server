@@ -50,6 +50,29 @@
 
   詳細: `docs/ip-filter.md`
 
+- **アカウントごとの IP 制限** (`allowed_ips` / `blocked_ips` アカウントフィールド):
+  `accounts.json` の各アカウントに個別の IP 制限を設定できます。サーバーレベルの IP フィルタリングとは独立して動作し、認証成功後にチェックされます。
+
+  ```json
+  {
+    "db_dir": ".",
+    "accounts": [
+      {
+        "name": "admin",
+        "public_key": "ssh-ed25519 AAAA...",
+        "allowed_ips": ["192.168.1.0/24"]
+      },
+      {
+        "name": "readonly_user",
+        "public_key": "ssh-ed25519 AAAA...",
+        "blocked_ips": ["10.0.0.0/8"]
+      }
+    ]
+  }
+  ```
+
+  アカウントの IP ルールに違反した場合は `AUTH_FAILED` が返されます。
+
 #### PoC (概念実証)
 
 - `poc_vulnerabilities/poc_account_name_bypass.py` を追加:
@@ -71,9 +94,10 @@
     - 存在しないアカウント名で実サーバーへの認証失敗
     - account_name 未指定で実サーバーへの認証成功 (後方互換性)
 
-- `tests/test_ip_filter.py` を追加 (計25件):
+- `tests/test_ip_filter.py` を追加 (計38件):
   - ユニットテスト `TestParseIpNetworks` (9件): 空リスト、単一 IP、CIDR、複数エントリ、不正エントリなど
   - ユニットテスト `TestIsIpAllowed` (14件): フィルタなし、allow のみ、block のみ、allow+block、unknown IP など
+  - ユニットテスト `TestAccountIpFilter` (13件): アカウントごとの IP 制限 (blocked/allowed CIDR、カンマ区切り文字列など)
   - 統合テスト (2件): `--allow-ips` / `--block-ips` オプションを実際のサーバーで検証
 
 ---

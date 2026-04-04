@@ -79,6 +79,38 @@ Priority order (evaluated in sequence):
 
 ---
 
+### Per-Account IP Restrictions
+
+In addition to server-level filtering, you can restrict connections on a per-account basis using `allowed_ips` and `blocked_ips` fields in `accounts.json`. This allows different accounts to have different IP access rules.
+
+```json
+{
+  "db_dir": ".",
+  "accounts": [
+    {
+      "name": "admin",
+      "public_key": "ssh-ed25519 AAAA...",
+      "allowed_ips": ["192.168.1.0/24"]
+    },
+    {
+      "name": "readonly_user",
+      "public_key": "ssh-ed25519 AAAA...",
+      "blocked_ips": ["10.0.0.0/8"]
+    },
+    {
+      "name": "unrestricted",
+      "public_key": "ssh-ed25519 AAAA..."
+    }
+  ]
+}
+```
+
+The account-level IP check is evaluated **after** authentication succeeds. If the authenticated account's IP rules reject the client, `AUTH_FAILED` is returned.
+
+The same decision rules apply: block list is checked first, then allow list.
+
+---
+
 ## 日本語
 
 ### 概要
@@ -151,3 +183,35 @@ nanasqlite-server \
 - 不正なエントリは**スキップ**され、警告ログが出力されます。サーバーは正常に起動を続けます。
 - IP フィルタリングは QUIC/UDP サーバーにおける**ベストエフォート**機能です。トランスポート層がピアアドレスを常に公開するとは限りません。主要なセキュリティ機構には必ずチャレンジ・レスポンス認証を使用してください。
 - `--block-ips` は常に `--allow-ips` より**優先**されます。
+
+---
+
+### アカウントごとの IP 制限
+
+サーバーレベルの IP フィルタリングに加えて、`accounts.json` の `allowed_ips` および `blocked_ips` フィールドを使用してアカウントごとに IP アクセスルールを設定できます。
+
+```json
+{
+  "db_dir": ".",
+  "accounts": [
+    {
+      "name": "admin",
+      "public_key": "ssh-ed25519 AAAA...",
+      "allowed_ips": ["192.168.1.0/24"]
+    },
+    {
+      "name": "readonly_user",
+      "public_key": "ssh-ed25519 AAAA...",
+      "blocked_ips": ["10.0.0.0/8"]
+    },
+    {
+      "name": "unrestricted",
+      "public_key": "ssh-ed25519 AAAA..."
+    }
+  ]
+}
+```
+
+アカウントレベルの IP チェックは**認証成功後**に評価されます。認証済みアカウントの IP ルールがクライアントを拒否した場合、`AUTH_FAILED` が返されます。
+
+判定ルールはサーバーレベルと同様です: block リストを先にチェックし、次に allow リストを確認します。
