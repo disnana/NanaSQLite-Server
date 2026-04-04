@@ -388,6 +388,9 @@ class AccountManager:
             return None
 
         # ヒントなし: 線形探索 (後方互換性)
+        logging.warning(
+            "安全性のためv1.4.xでは無効にされます。"
+        )
         for account in self.accounts:
             if self._verify_account_signature(account, signature, challenge):
                 return account
