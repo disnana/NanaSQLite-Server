@@ -23,7 +23,7 @@ jobs:
     outputs:
       run_sec: ${{ steps.filter.outputs.run_sec }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     
     - name: Check changed files
       id: filter
@@ -45,7 +45,7 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
     
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v4
@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -96,7 +96,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -125,7 +125,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
@@ -207,7 +207,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     
     - name: Scan for vulnerabilities
       uses: anchore/scan-action@v7
@@ -231,7 +231,7 @@ jobs:
     if: always() && needs.should-run.outputs.run_sec == 'true'
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     
     - name: Download all artifacts
       uses: actions/download-artifact@v8
